@@ -229,17 +229,12 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
 
 async function publishEvent(
   eventTemplate: NostrEventTemplate,
-  privkey: Uint8Array
+  privkey: Uint8Array,
+  relay: Relay
 ): Promise<void> {
   const signed = finalizeEvent(eventTemplate, privkey);
   console.log(`     → Event-ID: ${signed.id}`);
-
-  const relay = await Relay.connect(NOSTR_RELAY);
-  try {
-    await relay.publish(signed);
-  } finally {
-    relay.close();
-  }
+  await relay.publish(signed);
 }
 
 // ── Hauptprogramm ─────────────────────────────────────────────────────────────
@@ -277,30 +272,50 @@ async function main(): Promise<void> {
 
   // 3. Veröffentlichen oder Dry-Run-Ausgabe
   let published = 0;
+  let skipped   = 0;
   let failed    = 0;
 
-  for (const evt of events) {
-    const title    = evt.tags.find((t) => t[0] === "title")?.[1]   ?? "(kein Titel)";
-    const startSec = Number(evt.tags.find((t) => t[0] === "start")?.[1] ?? 0);
-    const startStr = startSec ? new Date(startSec * 1000).toISOString() : "?";
+  // Eine einzige Relay-Verbindung für alle Events (statt pro Event eine neue)
+  let relay: Relay | null = null;
+  if (!DRY_RUN) {
+    console.log(`🔌 Verbinde mit ${NOSTR_RELAY} …`);
+    relay = await Relay.connect(NOSTR_RELAY);
+    console.log("   ✅ Verbunden\n");
+  }
 
-    console.log(`  📌 "${title}"`);
-    console.log(`     Start : ${startStr}`);
+  try {
+    for (const evt of events) {
+      const title    = evt.tags.find((t) => t[0] === "title")?.[1]   ?? "(kein Titel)";
+      const startSec = Number(evt.tags.find((t) => t[0] === "start")?.[1] ?? 0);
+      const startStr = startSec ? new Date(startSec * 1000).toISOString() : "?";
 
-    if (DRY_RUN) {
-      console.log("     [DRY RUN] Tags:", JSON.stringify(evt.tags));
-      console.log(`     [DRY RUN] Content (${evt.content.length} Zeichen): ${evt.content.slice(0, 120)}…`);
-    } else {
-      try {
-        await publishEvent(evt, privkey!);
-        console.log("     ✅ Erfolgreich veröffentlicht");
-        published++;
-      } catch (err) {
-        console.error(`     ❌ Fehler: ${(err as Error).message}`);
-        failed++;
+      console.log(`  📌 "${title}"`);
+      console.log(`     Start : ${startStr}`);
+
+      if (DRY_RUN) {
+        console.log("     [DRY RUN] Tags:", JSON.stringify(evt.tags));
+        console.log(`     [DRY RUN] Content (${evt.content.length} Zeichen): ${evt.content.slice(0, 120)}…`);
+      } else {
+        try {
+          await publishEvent(evt, privkey!, relay!);
+          console.log("     ✅ Erfolgreich veröffentlicht");
+          published++;
+        } catch (err) {
+          const msg = (err as Error).message;
+          if (msg.includes("replaced: have newer")) {
+            console.log("     ⏭️  Übersprungen (Relay hat neuere Version)");
+            skipped++;
+          } else {
+            console.error(`     ❌ Fehler: ${msg}`);
+            failed++;
+          }
+        }
       }
+      console.log();
     }
-    console.log();
+  } finally {
+    relay?.close();
+    if (!DRY_RUN) console.log("🔌 Relay-Verbindung geschlossen\n");
   }
 
   // Zusammenfassung
@@ -309,6 +324,7 @@ async function main(): Promise<void> {
     console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
   } else {
     console.log(`   ${published} von ${events.length} Events erfolgreich veröffentlicht`);
+    if (skipped > 0) console.log(`   ⏭️  ${skipped} Events übersprungen (unverändert)`);
     if (failed > 0) console.log(`   ⚠️  ${failed} Events fehlgeschlagen`);
   }
 }

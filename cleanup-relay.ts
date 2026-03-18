@@ -144,30 +144,33 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 3. Delete-Events publizieren
+  // 3. Delete-Events publizieren (eine Verbindung für alle)
   console.log(`🗑️  Lösche ${events.length} Events …\n`);
+  console.log(`🔌 Verbinde mit ${NOSTR_RELAY} …`);
+  const delRelay = await Relay.connect(NOSTR_RELAY);
+  console.log("   ✅ Verbunden\n");
 
   let deleted = 0;
   let failed  = 0;
 
-  for (const evt of events) {
-    const title    = evt.tags.find((t) => t[0] === "title")?.[1] ?? "(kein Titel)";
-    const deleteTemplate = createDeleteEvent(evt);
+  try {
+    for (const evt of events) {
+      const title    = evt.tags.find((t) => t[0] === "title")?.[1] ?? "(kein Titel)";
+      const deleteTemplate = createDeleteEvent(evt);
 
-    try {
-      const signed = finalizeEvent(deleteTemplate, privkey);
-      const delRelay = await Relay.connect(NOSTR_RELAY);
       try {
+        const signed = finalizeEvent(deleteTemplate, privkey);
         await delRelay.publish(signed);
-      } finally {
-        delRelay.close();
+        console.log(`  ✅ Gelöscht: "${title}"`);
+        deleted++;
+      } catch (err) {
+        console.error(`  ❌ Fehler bei "${title}": ${(err as Error).message}`);
+        failed++;
       }
-      console.log(`  ✅ Gelöscht: "${title}"`);
-      deleted++;
-    } catch (err) {
-      console.error(`  ❌ Fehler bei "${title}": ${(err as Error).message}`);
-      failed++;
     }
+  } finally {
+    delRelay.close();
+    console.log("\n🔌 Relay-Verbindung geschlossen");
   }
 
   // Zusammenfassung

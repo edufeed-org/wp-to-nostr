@@ -11,6 +11,7 @@ Holt Posts aus einer WordPress REST-API, mappt sie auf das [NIP-52](https://gith
 - **HTML → Markdown** – Content und Excerpt via Turndown
 - **Addressable Events** – `d`-Tag = WordPress-Permalink, Relay ersetzt automatisch ältere Versionen
 - **Relay-Deduplizierung** – `created_at` = `modified_gmt` aus WordPress → unveränderte Posts werden vom Relay automatisch ignoriert (kein unnötiger Write)
+- **Single-Connection** – alle Events über eine einzige WebSocket-Verbindung (statt pro Event eine neue)
 - **Dry-Run-Modus** – Events anzeigen ohne zu posten
 - **Inspect-Tool** – einzelne Posts debuggen mit Vergleichstabelle
 - **Cleanup-Tool** – alle Events per NIP-09 vom Relay löschen (für sauberen Neuaufbau)
