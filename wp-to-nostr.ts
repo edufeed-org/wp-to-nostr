@@ -205,8 +205,22 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   tags.push(["r", wpUrl]);
   tags.push(...keywordTags);
 
-  // created_at = jetzt → Relay ersetzt immer die vorherige Version des Events
-  const createdAt = Math.floor(Date.now() / 1000);
+  // created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
+  // (kind:31923 ist adressierbar-ersetzbar: gleicher d-Tag + gleicher/älterer
+  //  created_at → Relay ignoriert das Event, höherer created_at → Relay ersetzt)
+  //
+  // Fallback: Viele Relays lehnen Events ab deren created_at zu weit in der
+  // Vergangenheit liegt ("created_at too early"). Für alte Posts verwenden wir
+  // einen festen Mindestwert (2025-01-01), damit:
+  //   1. alte unveränderte Posts trotzdem akzeptiert werden
+  //   2. der Wert stabil bleibt (gleicher created_at bei jedem Run → Deduplizierung)
+  // Wird ein alter Post in WP bearbeitet, steigt modified_gmt über den Floor
+  // und der natürliche Wert greift wieder.
+  const MIN_CREATED_AT = 1735689600;  // 2025-01-01T00:00:00Z
+  const modifiedAt = Math.floor(
+    new Date(post.modified_gmt + "Z").getTime() / 1000
+  ) || Math.floor(Date.now() / 1000);
+  const createdAt = Math.max(modifiedAt, MIN_CREATED_AT);
 
   return { kind: 31923, created_at: createdAt, tags, content: contentMd };
 }

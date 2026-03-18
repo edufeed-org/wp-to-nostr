@@ -10,8 +10,10 @@ Holt Posts aus einer WordPress REST-API, mappt sie auf das [NIP-52](https://gith
 - **Korrekte Zeitzonenkonvertierung** – WordPress-Lokalzeit (Europe/Berlin) → UTC-Timestamp
 - **HTML → Markdown** – Content und Excerpt via Turndown
 - **Addressable Events** – `d`-Tag = WordPress-Permalink, Relay ersetzt automatisch ältere Versionen
+- **Relay-Deduplizierung** – `created_at` = `modified_gmt` aus WordPress → unveränderte Posts werden vom Relay automatisch ignoriert (kein unnötiger Write)
 - **Dry-Run-Modus** – Events anzeigen ohne zu posten
 - **Inspect-Tool** – einzelne Posts debuggen mit Vergleichstabelle
+- **Cleanup-Tool** – alle Events per NIP-09 vom Relay löschen (für sauberen Neuaufbau)
 
 ## Schnellstart
 
@@ -46,6 +48,16 @@ deno task inspect              # erster Post
 WP_PAGE=3 deno task inspect    # erster Post von Seite 3
 ```
 
+### Relay aufräumen (alle Events löschen)
+
+```bash
+# Dry-Run – zeigt was gelöscht würde
+NOSTR_PRIVATE_KEY=nsec1… DRY_RUN=true deno task cleanup-dry
+
+# Live – löscht alle kind:31923-Events per NIP-09
+NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
+```
+
 ## Umgebungsvariablen
 
 | Variable           | Pflicht       | Standard                                          | Beschreibung                            |
@@ -75,6 +87,7 @@ Der Cron-Job läuft automatisch im Live-Modus (`DRY_RUN=false`).
 wp-to-nostr/
 ├── wp-to-nostr.ts              # Haupt-Sync-Script
 ├── inspect-mapping.ts          # Debug: einzelnen Post inspizieren
+├── cleanup-relay.ts            # NIP-09: alle Events vom Relay löschen
 ├── deno.json                   # Tasks & Import-Map
 ├── .github/workflows/sync.yml  # GitHub Actions Workflow
 ├── docs/
@@ -97,6 +110,18 @@ wp-to-nostr/
 | `acf.relilab_custom_zoom_link`      | `location`-Tag                      |
 | `featured_image_urls_v2.thumbnail`   | `image`-Tag                         |
 | `taxonomy_info.post_tag[].label`     | `t`-Tags                            |
+| `modified_gmt`                       | `created_at` (Relay-Deduplizierung) |
+
+### Relay-Deduplizierung via `created_at`
+
+`created_at` wird auf den `modified_gmt`-Wert aus WordPress gesetzt (Unix-Timestamp).
+Da kind:31923 ein adressierbares ersetzbares Event ist (NIP-33), gilt:
+
+- **Post unverändert** → `modified_gmt` gleich → `created_at` gleich → Relay ignoriert das Event
+- **Post bearbeitet** → `modified_gmt` steigt → `created_at` höher → Relay ersetzt das Event
+
+Für sehr alte Posts (deren `modified_gmt` vor 2025 liegt) greift ein fester Floor-Wert
+(`2025-01-01T00:00:00Z`), da viele Relays Events mit zu altem `created_at` ablehnen.
 
 Detaillierte Spezifikation: [docs/nostr-kind-31923.md](docs/nostr-kind-31923.md)
 

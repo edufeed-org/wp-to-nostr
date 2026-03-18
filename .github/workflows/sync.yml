@@ -15,6 +15,14 @@ on:
         options:
           - 'true'
           - 'false'
+      cleanup:
+        description: 'Cleanup – alle Events per NIP-09 vom Relay löschen (vor Neuaufbau)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   sync:
@@ -26,6 +34,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+
+      - name: Relay aufräumen (NIP-09 Deletion)
+        if: ${{ inputs.cleanup == 'true' }}
+        env:
+          NOSTR_PRIVATE_KEY: ${{ secrets.NOSTR_PRIVATE_KEY }}
+          NOSTR_RELAY: ${{ vars.WP_NOSTR_RELAY || 'wss://relay-rpi.edufeed.org' }}
+        run: deno task cleanup
 
       - name: WordPress → Nostr synchronisieren
         env:

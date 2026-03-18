@@ -32,7 +32,7 @@ Kalendereinträge, definiert in [NIP-52](https://github.com/nostr-protocol/nips/
 | Feld         | Beschreibung                                              |
 |--------------|-----------------------------------------------------------|
 | `kind`       | `31923`                                                   |
-| `created_at` | Unix-Timestamp der Erstellung (immer aktuell bei Sync)    |
+| `created_at` | Unix-Timestamp aus `modified_gmt` (Relay-Deduplizierung, siehe unten) |
 | `content`    | Langbeschreibung als Markdown (aus WP `content.rendered`) |
 
 ## Mapping: WordPress → Nostr
@@ -50,7 +50,7 @@ Kalendereinträge, definiert in [NIP-52](https://github.com/nostr-protocol/nips/
 | `acf.relilab_custom_zoom_link`      | `location`-Tag (`Zoom: URL`)       |
 | `featured_image_urls_v2.thumbnail[0]`| `image`-Tag                        |
 | `taxonomy_info.post_tag[].label`     | je ein `t`-Tag                     |
-| *(aktueller Zeitpunkt)*             | `created_at`                       |
+| `modified_gmt`                       | `created_at` (Relay-Deduplizierung) |
 
 ## Zeitzonenkonvertierung
 
@@ -65,6 +65,20 @@ WP-Datum:     "2026-03-13 16:00:00"  (= 16:00 Berlin, CET)
 UTC-Offset:   +1h
 Unix-TS:      1773414000  = 2026-03-13T15:00:00Z  (= 16:00 Berlin ✓)
 ```
+
+## Relay-Deduplizierung via `created_at`
+
+`created_at` wird auf den Unix-Timestamp von `modified_gmt` aus WordPress gesetzt.
+Da kind:31923 ein adressierbares ersetzbares Event ist (NIP-33, kind 30000–39999),
+vergleicht das Relay bei gleichem `d`-Tag + `pubkey` + `kind` den `created_at`-Wert:
+
+- `created_at` ≤ vorhandenes Event → Relay ignoriert (hat schon neuere Version)
+- `created_at` > vorhandenes Event → Relay ersetzt
+
+Damit werden bei jedem Sync nur tatsächlich geänderte WordPress-Posts neu auf das
+Relay geschrieben. Für Posts mit `modified_gmt` vor 2025 greift ein fester
+Floor-Wert (`2025-01-01T00:00:00Z` = `1735689600`), da viele Relays Events mit
+zu altem `created_at` ablehnen (`created_at too early`).
 
 ## Beispiel-Event (JSON)
 

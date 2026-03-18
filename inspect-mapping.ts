@@ -144,8 +144,10 @@ if (image)     tags.push(["image", image]);
 tags.push(["r", wpUrl]);
 tags.push(...keywordTags);
 
-// created_at = jetzt → Relay ersetzt immer die vorherige Version des Events
-const createdAt = Math.floor(Date.now() / 1000);
+// created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
+const createdAt = Math.floor(
+  new Date(p.modified_gmt + "Z").getTime() / 1000
+) || Math.floor(Date.now() / 1000);
 
 const nostrEvent = {
   kind:       31923,
@@ -174,7 +176,7 @@ const rows: [string, string, string][] = [
   ["featured_image_urls_v2[0]",   image || "(leer)",                       image ? `image: ${image}` : "(kein image-Tag)"],
   ["taxonomy_info.post_tag",      keywordTags.map(t=>t[1]).join(", "),     `${keywordTags.length}× t-Tag`],
   ["link (Quellverweis)",         wpUrl,                                    `r: ${wpUrl}`],
-  ["(jetzt)",                     new Date().toISOString(),                `created_at: ${createdAt} (immer aktuell)`],
+  ["modified_gmt",                p.modified_gmt ?? "(leer)",             `created_at: ${createdAt} (= modified_gmt)`],
 ];
 
 printTable(rows);
