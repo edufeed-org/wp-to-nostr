@@ -59,6 +59,11 @@ NOSTR_PRIVATE_KEY=nsec1… DRY_RUN=true deno task cleanup-dry
 NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
 ```
 
+> **Hinweis zu strfry:** NIP-09 Delete-Events werden von strfry persistent gespeichert.
+> Nach einem Cleanup lehnt strfry Neu-Publikationen für gelöschte Adressen ab.
+> Für einen sauberen Neuaufbau müssen die Delete-Events (kind:5) direkt auf dem
+> Relay-Server entfernt werden – siehe [docs/strfry-cleanup.md](docs/strfry-cleanup.md).
+
 ## Umgebungsvariablen
 
 | Variable           | Pflicht       | Standard                                          | Beschreibung                            |
