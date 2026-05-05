@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE
+#!/usr/bin/env -S deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * inspect-mapping.ts
  *
@@ -14,10 +14,20 @@
 
 // @deno-types="npm:@types/turndown"
 import TurndownService from "turndown";
+import {
+  parseExtraHashtags,
+  parseCommunityNpubs,
+  mergeExtraHashtags,
+  mergeCommunityHTags,
+} from "./wp-to-nostr.ts";
 
 const WP_API_URL  = Deno.env.get("WP_API_URL")  ?? "https://relilab.org/wp-json/wp/v2/posts";
 const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
 const WP_PAGE     = Deno.env.get("WP_PAGE")     ?? "1";
+const EXTRA_HASHTAGS_RAW = Deno.env.get("EXTRA_HASHTAGS") ?? "";
+const COMMUNITY_NPUBS_RAW = Deno.env.get("COMMUNITY_NPUBS") ?? "";
+const EXTRA_HASHTAGS = parseExtraHashtags(EXTRA_HASHTAGS_RAW);
+const COMMUNITY_HEX_PUBKEYS = parseCommunityNpubs(COMMUNITY_NPUBS_RAW);
 
 // ── HTML → Markdown (identisch zu wp-to-nostr.ts) ────────────────────────────
 
@@ -144,6 +154,9 @@ if (image)     tags.push(["image", image]);
 tags.push(["r", wpUrl]);
 tags.push(...keywordTags);
 
+let enrichedTags = mergeExtraHashtags(tags, EXTRA_HASHTAGS);
+enrichedTags = mergeCommunityHTags(enrichedTags, COMMUNITY_HEX_PUBKEYS);
+
 // created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
 const createdAt = Math.floor(
   new Date(p.modified_gmt + "Z").getTime() / 1000
@@ -152,7 +165,7 @@ const createdAt = Math.floor(
 const nostrEvent = {
   kind:       31923,
   created_at: createdAt,
-  tags,
+  tags:       enrichedTags,
   content:    contentMd,
 };
 
