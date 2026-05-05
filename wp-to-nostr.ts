@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
+#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * wp-to-nostr.ts
  *
@@ -59,6 +59,7 @@ const WP_API_URL  = Deno.env.get("WP_API_URL")  ?? "https://relilab.org/wp-json/
 const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
 const NOSTR_RELAY = Deno.env.get("NOSTR_RELAY") ?? "wss://relay-rpi.edufeed.org";
 const DRY_RUN     = Deno.env.get("DRY_RUN") === "true";
+const FORCE_REPUBLISH = Deno.env.get("FORCE_REPUBLISH") === "true";
 const PRIVKEY_RAW = Deno.env.get("NOSTR_PRIVATE_KEY") ?? "";
 const EXTRA_HASHTAGS_RAW = Deno.env.get("EXTRA_HASHTAGS") ?? "";
 const COMMUNITY_NPUBS_RAW = Deno.env.get("COMMUNITY_NPUBS") ?? "";
@@ -308,11 +309,17 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   //   2. der Wert stabil bleibt (gleicher created_at bei jedem Run → Deduplizierung)
   // Wird ein alter Post in WP bearbeitet, steigt modified_gmt über den Floor
   // und der natürliche Wert greift wieder.
+  //
+  // FORCE_REPUBLISH=true überschreibt das einmalig mit Date.now(), damit der
+  // Relay alle Events (auch unveränderte) durch frische Versionen ersetzt –
+  // nützlich nach Anreicherungs-Änderungen, die rückwirkend gelten sollen.
   const MIN_CREATED_AT = 1735689600;  // 2025-01-01T00:00:00Z
   const modifiedAt = Math.floor(
     new Date(post.modified_gmt + "Z").getTime() / 1000
   ) || Math.floor(Date.now() / 1000);
-  const createdAt = Math.max(modifiedAt, MIN_CREATED_AT);
+  const createdAt = FORCE_REPUBLISH
+    ? Math.floor(Date.now() / 1000)
+    : Math.max(modifiedAt, MIN_CREATED_AT);
 
   return { kind: 31923, created_at: createdAt, tags: enrichedTags, content: contentMd };
 }

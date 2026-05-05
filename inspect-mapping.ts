@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,NOSTR_PRIVATE_KEY,DRY_RUN,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
+#!/usr/bin/env -S deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * inspect-mapping.ts
  *
