@@ -1,7 +1,7 @@
 # Hashtag-Anreicherung für Nostr-Kalenderevents
 
 **Datum:** 2026-04-20
-**Status:** Design abgestimmt, Implementierung ausstehend.
+**Status:** Implementiert (siehe `docs/superpowers/plans/2026-05-05-tag-enrichment.md`).
 **Update 2026-05-05:** Default-Pattern angepasst — `relilab` lebt jetzt im
 Workflow (`sync.yml`), Code-Default ist leer. Begründung und Begleitspec
 siehe [`2026-05-05-community-h-tag-design.md`](2026-05-05-community-h-tag-design.md).

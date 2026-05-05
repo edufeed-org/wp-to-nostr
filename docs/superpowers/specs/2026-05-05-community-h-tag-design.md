@@ -1,7 +1,7 @@
 # Community-Zuordnung für Nostr-Kalenderevents (Communikey `h`-Tag)
 
 **Datum:** 2026-05-05
-**Status:** Design abgestimmt, Implementierung ausstehend
+**Status:** Implementiert (siehe `docs/superpowers/plans/2026-05-05-tag-enrichment.md`)
 
 ## Ziel
 
