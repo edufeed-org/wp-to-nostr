@@ -2,7 +2,7 @@
   "tasks": {
     "start":   "deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS wp-to-nostr.ts",
     "dry-run": "DRY_RUN=true deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS wp-to-nostr.ts",
-    "inspect": "deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,EXTRA_HASHTAGS,COMMUNITY_NPUBS inspect-mapping.ts",
+    "inspect": "deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,NOSTR_PRIVATE_KEY,DRY_RUN,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS inspect-mapping.ts",
     "cleanup":     "NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
     "cleanup-dry": "DRY_RUN=true NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
     "test":    "deno test --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS tests/"
