@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY
+#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * wp-to-nostr.ts
  *
@@ -60,6 +60,11 @@ const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
 const NOSTR_RELAY = Deno.env.get("NOSTR_RELAY") ?? "wss://relay-rpi.edufeed.org";
 const DRY_RUN     = Deno.env.get("DRY_RUN") === "true";
 const PRIVKEY_RAW = Deno.env.get("NOSTR_PRIVATE_KEY") ?? "";
+const EXTRA_HASHTAGS_RAW = Deno.env.get("EXTRA_HASHTAGS") ?? "";
+const COMMUNITY_NPUBS_RAW = Deno.env.get("COMMUNITY_NPUBS") ?? "";
+
+const EXTRA_HASHTAGS = parseExtraHashtags(EXTRA_HASHTAGS_RAW);
+const COMMUNITY_HEX_PUBKEYS = parseCommunityNpubs(COMMUNITY_NPUBS_RAW);
 
 // ── Privaten Schlüssel auflösen ───────────────────────────────────────────────
 
@@ -91,6 +96,90 @@ const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fen
 function htmlToMarkdown(html: string): string {
   if (!html) return "";
   return turndown.turndown(html).trim();
+}
+
+// ── Hashtag-Anreicherung ──────────────────────────────────────────────────────
+
+export function parseExtraHashtags(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().replace(/^#/, ""))
+    .filter((entry) => entry.length > 0);
+}
+
+export function mergeExtraHashtags(
+  tags: string[][],
+  extras: string[],
+): string[][] {
+  const existing = new Set(
+    tags
+      .filter((t) => t[0] === "t")
+      .map((t) => (t[1] ?? "").toLowerCase()),
+  );
+  const result = tags.map((t) => [...t]);
+  for (const extra of extras) {
+    const norm = extra.toLowerCase();
+    if (!existing.has(norm)) {
+      result.push(["t", extra]);
+      existing.add(norm);
+    }
+  }
+  return result;
+}
+
+// ── Community-Zuordnung (Communikey h-Tag) ────────────────────────────────────
+
+export function parseCommunityNpubs(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawEntry of raw.split(",")) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+
+    let hex: string;
+    if (entry.startsWith("npub1")) {
+      let decoded;
+      try {
+        decoded = decode(entry);
+      } catch (err) {
+        throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}" (${(err as Error).message})`);
+      }
+      if (decoded.type !== "npub") {
+        throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}" (Typ ${decoded.type})`);
+      }
+      hex = (decoded.data as string).toLowerCase();
+    } else if (/^[0-9a-f]{64}$/i.test(entry)) {
+      hex = entry.toLowerCase();
+    } else {
+      throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}"`);
+    }
+
+    if (!seen.has(hex)) {
+      seen.add(hex);
+      result.push(hex);
+    }
+  }
+  return result;
+}
+
+export function mergeCommunityHTags(
+  tags: string[][],
+  hexPubkeys: string[],
+): string[][] {
+  const existing = new Set(
+    tags
+      .filter((t) => t[0] === "h")
+      .map((t) => (t[1] ?? "").toLowerCase()),
+  );
+  const result = tags.map((t) => [...t]);
+  for (const hex of hexPubkeys) {
+    const norm = hex.toLowerCase();
+    if (!existing.has(norm)) {
+      result.push(["h", hex]);
+      existing.add(norm);
+    }
+  }
+  return result;
 }
 
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
@@ -205,6 +294,9 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   tags.push(["r", wpUrl]);
   tags.push(...keywordTags);
 
+  let enrichedTags = mergeExtraHashtags(tags, EXTRA_HASHTAGS);
+  enrichedTags = mergeCommunityHTags(enrichedTags, COMMUNITY_HEX_PUBKEYS);
+
   // created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
   // (kind:31923 ist adressierbar-ersetzbar: gleicher d-Tag + gleicher/älterer
   //  created_at → Relay ignoriert das Event, höherer created_at → Relay ersetzt)
@@ -222,7 +314,7 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   ) || Math.floor(Date.now() / 1000);
   const createdAt = Math.max(modifiedAt, MIN_CREATED_AT);
 
-  return { kind: 31923, created_at: createdAt, tags, content: contentMd };
+  return { kind: 31923, created_at: createdAt, tags: enrichedTags, content: contentMd };
 }
 
 // ── Auf Nostr veröffentlichen ─────────────────────────────────────────────────
@@ -329,7 +421,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: Error) => {
-  console.error("\n💥 Fatal:", err.message);
-  Deno.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err: Error) => {
+    console.error("\n💥 Fatal:", err.message);
+    Deno.exit(1);
+  });
+}

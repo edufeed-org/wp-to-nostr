@@ -103,3 +103,15 @@ zu altem `created_at` ablehnen (`created_at too early`).
   "content": "# Beispieltermin\n\nAusführliche Beschreibung in Markdown …"
 }
 ```
+
+### Anreicherung über Konfiguration
+
+Zusätzlich zu den aus WordPress abgeleiteten Tags können per Env-Variable
+weitere Tags injiziert werden:
+
+- `EXTRA_HASHTAGS` → `["t", "<wert>"]` pro Eintrag (Hashtag-Anreicherung).
+- `COMMUNITY_NPUBS` → `["h", "<hex>"]` pro Eintrag (Communikey-Spec).
+
+Beide Anreicherungen sind optional (Code-Default: leer). Sie sind
+case-insensitive dedupliziert; bereits aus WordPress oder einer früheren
+Iteration vorhandene Tags werden nicht überschrieben oder dupliziert.

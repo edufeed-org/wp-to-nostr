@@ -1,15 +1,17 @@
 {
   "tasks": {
-    "start":   "deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY wp-to-nostr.ts",
-    "dry-run": "DRY_RUN=true deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY wp-to-nostr.ts",
-    "inspect": "deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE inspect-mapping.ts",
+    "start":   "deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS wp-to-nostr.ts",
+    "dry-run": "DRY_RUN=true deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS wp-to-nostr.ts",
+    "inspect": "deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,NOSTR_PRIVATE_KEY,DRY_RUN,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS inspect-mapping.ts",
     "cleanup":     "NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
-    "cleanup-dry": "DRY_RUN=true NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts"
+    "cleanup-dry": "DRY_RUN=true NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
+    "test":    "deno test --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS tests/"
   },
   "imports": {
     "nostr-tools":       "npm:nostr-tools@^2.10.4",
     "nostr-tools/relay": "npm:nostr-tools@^2.10.4/relay",
     "nostr-tools/nip19": "npm:nostr-tools@^2.10.4/nip19",
-    "turndown":          "npm:turndown@^7.2.0"
+    "turndown":          "npm:turndown@^7.2.0",
+    "@std/assert":       "jsr:@std/assert@^1.0.0"
   }
 }

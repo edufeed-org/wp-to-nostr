@@ -34,4 +34,6 @@ jobs:
           WP_API_URL: ${{ vars.WP_API_URL || 'https://relilab.org/wp-json/wp/v2/posts' }}
           WP_CATEGORY: ${{ vars.WP_CATEGORY || '176' }}
           NOSTR_RELAY: ${{ vars.WP_NOSTR_RELAY || 'wss://relay-rpi.edufeed.org' }}
+          EXTRA_HASHTAGS: ${{ vars.WP_EXTRA_HASHTAGS || 'relilab' }}
+          COMMUNITY_NPUBS: ${{ vars.WP_COMMUNITY_NPUBS || 'npub1fpcxaz2wvjl90gjs60x37ny2pa5u4yqfx7fklz73rgfjnnfujl3sr2fxgk' }}
         run: deno task start
