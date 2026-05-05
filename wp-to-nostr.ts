@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY
+#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * wp-to-nostr.ts
  *
