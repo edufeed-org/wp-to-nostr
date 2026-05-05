@@ -74,7 +74,7 @@ NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
 | `SYNC_MODE`        | –             | `calendar`                                        | `calendar` (kind:31923 Termine) oder `article` (kind:30023 Long-Form) |
 | `WP_API_URL`       | –             | `https://relilab.org/wp-json/wp/v2/posts`         | WordPress REST-API-Endpunkt             |
 | `WP_CATEGORY`      | –             | `176`                                             | WordPress-Kategorie-ID (Termine: 176; Lernmodule: 6) |
-| `NOSTR_RELAY`      | –             | `wss://relay-rpi.edufeed.org`                     | Ziel-Relay (WSS-URL)                    |
+| `NOSTR_RELAYS`     | –             | 4 Relays (siehe Workflow)                          | Komma-separierte Liste von Ziel-Relays. Singular `NOSTR_RELAY` wird zusätzlich akzeptiert (rückwärtskompatibel). |
 | `EXTRA_HASHTAGS`  | –             | `""` (Workflow: `relilab`)                        | Komma-separierte Hashtag-Liste, wird jedem Event als `t`-Tag angehängt, falls nicht ohnehin aus WordPress-Tags vorhanden. Case-insensitive Dedup. |
 | `COMMUNITY_NPUBS` | –             | `""` (Workflow: relilab-npub)                     | Komma-separierte Liste von Community-Pubkeys (npub1… oder Hex), die als `h`-Tag (Communikey-Spec) an jedes Event angehängt werden. |
 
@@ -118,7 +118,7 @@ sich nur durch Env-Variablen.
 ### Einrichtung
 
 1. **Secret anlegen:** Repository → Settings → Secrets → Actions → `NOSTR_PRIVATE_KEY`
-2. **Optional – Variables:** `WP_API_URL`, `WP_CATEGORY` (Termine), `WP_ARTICLE_CATEGORY` (Beiträge), `WP_NOSTR_RELAY`, `WP_EXTRA_HASHTAGS`, `WP_COMMUNITY_NPUBS` als Repository-Variables setzen, um die Defaults zu überschreiben
+2. **Optional – Variables:** `WP_API_URL`, `WP_CATEGORY` (Termine), `WP_ARTICLE_CATEGORY` (Beiträge), `WP_NOSTR_RELAYS`, `WP_EXTRA_HASHTAGS`, `WP_COMMUNITY_NPUBS` als Repository-Variables setzen, um die Defaults zu überschreiben
 3. **Manueller Test:** Actions → „WordPress → Nostr Sync" / „WordPress → Nostr Article Sync" → „Run workflow" → Dry Run = `true`
 4. **Live schalten:** Workflow erneut starten mit Dry Run = `false`
 

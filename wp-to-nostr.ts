@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,SYNC_MODE,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
+#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,SYNC_MODE,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,NOSTR_RELAYS,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * wp-to-nostr.ts
  *
@@ -63,7 +63,15 @@ interface NostrEventTemplate {
 
 const WP_API_URL  = Deno.env.get("WP_API_URL")  ?? "https://relilab.org/wp-json/wp/v2/posts";
 const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
-const NOSTR_RELAY = Deno.env.get("NOSTR_RELAY") ?? "wss://relay-rpi.edufeed.org";
+// Komma-separierte Relay-Liste. Beide Variablen werden zusammengeführt:
+// - NOSTR_RELAY (Singular, rückwärtskompatibel zu früheren Workflow-Configs)
+// - NOSTR_RELAYS (Plural, primär verwendet)
+// Default = ein einzelnes edufeed-Relay, damit ein leerer Forks-Setup auch
+// ohne explizite Konfiguration funktioniert.
+const NOSTR_RELAY_RAW  = Deno.env.get("NOSTR_RELAY")  ?? "";
+const NOSTR_RELAYS_RAW = Deno.env.get("NOSTR_RELAYS") ?? "";
+const NOSTR_RELAYS = parseRelayList(`${NOSTR_RELAYS_RAW},${NOSTR_RELAY_RAW}`);
+if (NOSTR_RELAYS.length === 0) NOSTR_RELAYS.push("wss://relay-rpi.edufeed.org");
 const DRY_RUN     = Deno.env.get("DRY_RUN") === "true";
 const FORCE_REPUBLISH = Deno.env.get("FORCE_REPUBLISH") === "true";
 const SYNC_MODE: SyncMode = (Deno.env.get("SYNC_MODE") ?? "calendar") === "article"
@@ -106,6 +114,26 @@ const turndown = new TurndownService({ headingStyle: "atx", codeBlockStyle: "fen
 function htmlToMarkdown(html: string): string {
   if (!html) return "";
   return turndown.turndown(html).trim();
+}
+
+// ── Relay-Liste parsen ────────────────────────────────────────────────────────
+// Akzeptiert eine komma-separierte Liste von Relay-URLs. Dedupliziert
+// case-insensitive auf der URL (z. B. WSS://Relay vs wss://relay).
+// Leere Einträge werden ignoriert.
+
+export function parseRelayList(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawEntry of raw.split(",")) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+    const norm = entry.toLowerCase();
+    if (!seen.has(norm)) {
+      seen.add(norm);
+      result.push(entry);
+    }
+  }
+  return result;
 }
 
 // ── Hashtag-Anreicherung ──────────────────────────────────────────────────────
@@ -405,14 +433,40 @@ export function mapPostToArticleEvent(post: WpPost): NostrEventTemplate {
 
 // ── Auf Nostr veröffentlichen ─────────────────────────────────────────────────
 
+interface PublishResult {
+  url: string;
+  ok: boolean;
+  error?: string;
+  skipped?: boolean;  // Relay hat neuere Version
+}
+
+// Publiziert ein Event auf alle übergebenen Relays parallel. Failures auf
+// einzelnen Relays brechen den Lauf nicht ab — sie werden im Ergebnis
+// dokumentiert und nach allen Events aggregiert.
 async function publishEvent(
   eventTemplate: NostrEventTemplate,
   privkey: Uint8Array,
-  relay: Relay
-): Promise<void> {
+  relays: Array<{ url: string; relay: Relay | null }>,
+): Promise<PublishResult[]> {
   const signed = finalizeEvent(eventTemplate, privkey);
   console.log(`     → Event-ID: ${signed.id}`);
-  await relay.publish(signed);
+
+  const results = await Promise.all(
+    relays.map(async ({ url, relay }): Promise<PublishResult> => {
+      if (!relay) return { url, ok: false, error: "nicht verbunden" };
+      try {
+        await relay.publish(signed);
+        return { url, ok: true };
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (msg.includes("replaced: have newer")) {
+          return { url, ok: true, skipped: true };
+        }
+        return { url, ok: false, error: msg };
+      }
+    }),
+  );
+  return results;
 }
 
 // ── Hauptprogramm ─────────────────────────────────────────────────────────────
@@ -423,7 +477,7 @@ async function main(): Promise<void> {
     : "📅 Calendar-Sync (kind:31923 Termine)";
 
   console.log(`\n🔄 WordPress → Nostr Sync — ${modeLabel}`);
-  console.log(`   Relay : ${NOSTR_RELAY}`);
+  console.log(`   Relays: ${NOSTR_RELAYS.join(", ")}`);
   console.log(`   Modus : ${DRY_RUN
     ? "🧪 DRY RUN – keine Events werden tatsächlich gesendet"
     : "🚀 LIVE – Events werden auf Nostr veröffentlicht"}\n`);
@@ -456,16 +510,32 @@ async function main(): Promise<void> {
   }
 
   // 3. Veröffentlichen oder Dry-Run-Ausgabe
-  let published = 0;
-  let skipped   = 0;
-  let failed    = 0;
+  // Pro Relay separat zählen, plus Gesamt-Erfolg pro Event (mind. 1 Relay
+  // hat das Event akzeptiert). Schickt das Event aber an alle Relays parallel.
+  const perRelayStats = new Map<string, { ok: number; skipped: number; failed: number }>();
+  for (const url of NOSTR_RELAYS) {
+    perRelayStats.set(url, { ok: 0, skipped: 0, failed: 0 });
+  }
+  let eventsAcceptedSomewhere = 0;
+  let eventsRejectedEverywhere = 0;
 
-  // Eine einzige Relay-Verbindung für alle Events (statt pro Event eine neue)
-  let relay: Relay | null = null;
+  // Verbindungs-Pool aufbauen — eine Connection pro Relay, geteilt über alle
+  // Events. Failures beim Connect werden nicht fatal: das Relay wird mit
+  // null markiert und beim Publish übersprungen.
+  const relayPool: Array<{ url: string; relay: Relay | null }> = [];
   if (!DRY_RUN) {
-    console.log(`🔌 Verbinde mit ${NOSTR_RELAY} …`);
-    relay = await Relay.connect(NOSTR_RELAY);
-    console.log("   ✅ Verbunden\n");
+    console.log(`🔌 Verbinde mit ${NOSTR_RELAYS.length} Relay(s) …`);
+    for (const url of NOSTR_RELAYS) {
+      try {
+        const relay = await Relay.connect(url);
+        relayPool.push({ url, relay });
+        console.log(`   ✅ ${url}`);
+      } catch (err) {
+        relayPool.push({ url, relay: null });
+        console.error(`   ❌ ${url}: ${(err as Error).message}`);
+      }
+    }
+    console.log();
   }
 
   try {
@@ -488,26 +558,34 @@ async function main(): Promise<void> {
         console.log("     [DRY RUN] Tags:", JSON.stringify(evt.tags));
         console.log(`     [DRY RUN] Content (${evt.content.length} Zeichen): ${evt.content.slice(0, 120)}…`);
       } else {
-        try {
-          await publishEvent(evt, privkey!, relay!);
-          console.log("     ✅ Erfolgreich veröffentlicht");
-          published++;
-        } catch (err) {
-          const msg = (err as Error).message;
-          if (msg.includes("replaced: have newer")) {
-            console.log("     ⏭️  Übersprungen (Relay hat neuere Version)");
-            skipped++;
+        const results = await publishEvent(evt, privkey!, relayPool);
+        let acceptedCount = 0;
+        for (const r of results) {
+          const stat = perRelayStats.get(r.url)!;
+          if (r.ok && r.skipped) {
+            stat.skipped++;
+            acceptedCount++;
+          } else if (r.ok) {
+            stat.ok++;
+            acceptedCount++;
           } else {
-            console.error(`     ❌ Fehler: ${msg}`);
-            failed++;
+            stat.failed++;
+            console.error(`     ❌ ${r.url}: ${r.error}`);
           }
         }
+        const okCount = results.filter((r) => r.ok && !r.skipped).length;
+        const skipCount = results.filter((r) => r.ok && r.skipped).length;
+        const failCount = results.filter((r) => !r.ok).length;
+        console.log(`     ✅ ${okCount} ok, ⏭️  ${skipCount} skipped, ❌ ${failCount} failed`);
+
+        if (acceptedCount > 0) eventsAcceptedSomewhere++;
+        else eventsRejectedEverywhere++;
       }
       console.log();
     }
   } finally {
-    relay?.close();
-    if (!DRY_RUN) console.log("🔌 Relay-Verbindung geschlossen\n");
+    for (const { relay } of relayPool) relay?.close();
+    if (!DRY_RUN) console.log("🔌 Relay-Verbindungen geschlossen\n");
   }
 
   // Zusammenfassung
@@ -515,9 +593,14 @@ async function main(): Promise<void> {
   if (DRY_RUN) {
     console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
   } else {
-    console.log(`   ${published} von ${events.length} Events erfolgreich veröffentlicht`);
-    if (skipped > 0) console.log(`   ⏭️  ${skipped} Events übersprungen (unverändert)`);
-    if (failed > 0) console.log(`   ⚠️  ${failed} Events fehlgeschlagen`);
+    console.log(`   ${eventsAcceptedSomewhere}/${events.length} Events von mindestens einem Relay akzeptiert`);
+    if (eventsRejectedEverywhere > 0) {
+      console.log(`   ⚠️  ${eventsRejectedEverywhere} Events von keinem Relay akzeptiert`);
+    }
+    console.log(`   Pro Relay:`);
+    for (const [url, s] of perRelayStats) {
+      console.log(`     ${url}: ${s.ok} ok · ${s.skipped} skipped · ${s.failed} failed`);
+    }
   }
 }
 
