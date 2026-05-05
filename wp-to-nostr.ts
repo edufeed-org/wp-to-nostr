@@ -60,6 +60,11 @@ const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
 const NOSTR_RELAY = Deno.env.get("NOSTR_RELAY") ?? "wss://relay-rpi.edufeed.org";
 const DRY_RUN     = Deno.env.get("DRY_RUN") === "true";
 const PRIVKEY_RAW = Deno.env.get("NOSTR_PRIVATE_KEY") ?? "";
+const EXTRA_HASHTAGS_RAW = Deno.env.get("EXTRA_HASHTAGS") ?? "";
+const COMMUNITY_NPUBS_RAW = Deno.env.get("COMMUNITY_NPUBS") ?? "";
+
+const EXTRA_HASHTAGS = parseExtraHashtags(EXTRA_HASHTAGS_RAW);
+const COMMUNITY_HEX_PUBKEYS = parseCommunityNpubs(COMMUNITY_NPUBS_RAW);
 
 // ── Privaten Schlüssel auflösen ───────────────────────────────────────────────
 
@@ -284,6 +289,9 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   tags.push(["r", wpUrl]);
   tags.push(...keywordTags);
 
+  let enrichedTags = mergeExtraHashtags(tags, EXTRA_HASHTAGS);
+  enrichedTags = mergeCommunityHTags(enrichedTags, COMMUNITY_HEX_PUBKEYS);
+
   // created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
   // (kind:31923 ist adressierbar-ersetzbar: gleicher d-Tag + gleicher/älterer
   //  created_at → Relay ignoriert das Event, höherer created_at → Relay ersetzt)
@@ -301,7 +309,7 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   ) || Math.floor(Date.now() / 1000);
   const createdAt = Math.max(modifiedAt, MIN_CREATED_AT);
 
-  return { kind: 31923, created_at: createdAt, tags, content: contentMd };
+  return { kind: 31923, created_at: createdAt, tags: enrichedTags, content: contentMd };
 }
 
 // ── Auf Nostr veröffentlichen ─────────────────────────────────────────────────
