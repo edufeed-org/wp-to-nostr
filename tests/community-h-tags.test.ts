@@ -52,6 +52,17 @@ Deno.test("parseCommunityNpubs: Hex falscher Länge wirft", () => {
   );
 });
 
+Deno.test("parseCommunityNpubs: kaputter npub wirft mit COMMUNITY_NPUBS-Präfix", () => {
+  // bech32-Garbage hinter dem npub1-Prefix: nostr-tools.decode würde mit
+  // einer opaken Meldung crashen — wir fangen das ab und reichen den
+  // Eintrag im Klartext mitsamt unserem Variablen-Präfix durch.
+  assertThrows(
+    () => parseCommunityNpubs("npub1abc"),
+    Error,
+    "COMMUNITY_NPUBS: ungültiger Eintrag „npub1abc",
+  );
+});
+
 Deno.test("mergeCommunityHTags: h-Tag wird hinzugefügt", () => {
   const tags = [["title", "X"]];
   const out = mergeCommunityHTags(tags, [RELILAB_HEX]);

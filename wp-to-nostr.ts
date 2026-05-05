@@ -138,7 +138,12 @@ export function parseCommunityNpubs(raw: string): string[] {
 
     let hex: string;
     if (entry.startsWith("npub1")) {
-      const decoded = decode(entry);
+      let decoded;
+      try {
+        decoded = decode(entry);
+      } catch (err) {
+        throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}" (${(err as Error).message})`);
+      }
       if (decoded.type !== "npub") {
         throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}" (Typ ${decoded.type})`);
       }
