@@ -122,6 +122,36 @@ export function mergeExtraHashtags(
   return result;
 }
 
+// ── Community-Zuordnung (Communikey h-Tag) ────────────────────────────────────
+
+export function parseCommunityNpubs(raw: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawEntry of raw.split(",")) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+
+    let hex: string;
+    if (entry.startsWith("npub1")) {
+      const decoded = decode(entry);
+      if (decoded.type !== "npub") {
+        throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}" (Typ ${decoded.type})`);
+      }
+      hex = (decoded.data as string).toLowerCase();
+    } else if (/^[0-9a-f]{64}$/i.test(entry)) {
+      hex = entry.toLowerCase();
+    } else {
+      throw new Error(`COMMUNITY_NPUBS: ungültiger Eintrag „${entry}"`);
+    }
+
+    if (!seen.has(hex)) {
+      seen.add(hex);
+      result.push(hex);
+    }
+  }
+  return result;
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
 async function fetchWpPosts(): Promise<WpPost[]> {
