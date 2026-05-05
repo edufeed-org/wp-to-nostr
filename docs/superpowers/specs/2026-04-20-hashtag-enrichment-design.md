@@ -1,7 +1,12 @@
 # Hashtag-Anreicherung für Nostr-Kalenderevents
 
 **Datum:** 2026-04-20
-**Status:** Design abgestimmt, Implementierung ausstehend
+**Status:** Design abgestimmt, Implementierung ausstehend.
+**Update 2026-05-05:** Default-Pattern angepasst — `relilab` lebt jetzt im
+Workflow (`sync.yml`), Code-Default ist leer. Begründung und Begleitspec
+siehe [`2026-05-05-community-h-tag-design.md`](2026-05-05-community-h-tag-design.md).
+Damit ist auch die offene Frage „Community-Kopplung (NIP-72)" gelöst —
+über die Communikey-Spec, nicht über NIP-72 (siehe Begleitspec).
 
 ## Ziel
 
@@ -33,9 +38,20 @@ das Skript als Blaupause für weitere Deployments mit anderen Hashtags dient.
 
 Neue Umgebungsvariable:
 
-| Variable         | Pflicht | Standard  | Beschreibung                                                                                                                                                  |
-|------------------|---------|-----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `EXTRA_HASHTAGS` | –       | `relilab` | Komma-separierte Liste zusätzlicher Hashtags, die jedem Event als `t`-Tag hinzugefügt werden, falls noch nicht vorhanden. Leerer String → keine Anreicherung. |
+| Variable         | Pflicht | Standard (Code) | Beschreibung                                                                                                                                                  |
+|------------------|---------|-----------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `EXTRA_HASHTAGS` | –       | `""`            | Komma-separierte Liste zusätzlicher Hashtags, die jedem Event als `t`-Tag hinzugefügt werden, falls noch nicht vorhanden. Leerer String → keine Anreicherung. |
+
+Der projektspezifische Default `relilab` wird **nicht** im Code, sondern im
+Workflow (`sync.yml`) als Fallback hinter einer Repo-Variable gesetzt —
+analog zum Pattern bei `WP_NOSTR_RELAY` etc.:
+
+```yaml
+EXTRA_HASHTAGS: ${{ vars.WP_EXTRA_HASHTAGS || 'relilab' }}
+```
+
+Damit bleibt der Code projekt-neutral (Blaupausen-Aspekt), und Forks
+können einfach eine andere Repo-Variable setzen.
 
 ### Parsing-Regeln
 
@@ -139,8 +155,15 @@ Iterationen darauf aufbauen können.
 
 ### Community-Kopplung (NIP-72)
 
-**Wunsch:** Events sollen automatisch der relilab-Community (auf
-edufeed.org, Owner-Pubkey
+**Status (Update 2026-05-05): Gelöst.** Die Community-Zuordnung wurde im
+Begleitspec [`2026-05-05-community-h-tag-design.md`](2026-05-05-community-h-tag-design.md)
+spezifiziert — allerdings **nicht** über NIP-72 (`a`-Tag, kind:34550,
+Mod-Approval), sondern über die **Communikey-Spec** (`h`-Tag, kind:10222,
+Community = Pubkey). Der untenstehende Abschnitt bleibt als
+Entscheidungs-Historie erhalten.
+
+**Wunsch (ursprünglich):** Events sollen automatisch der relilab-Community
+(auf edufeed.org, Owner-Pubkey
 `npub1fpcxaz2wvjl90gjs60x37ny2pa5u4yqfx7fklz73rgfjnnfujl3sr2fxgk` =
 `48706e894e64be57a250d3cd1f4c8a0f69ca900937936f8bd11a1329cd3c97e3`)
 zugeordnet werden.
