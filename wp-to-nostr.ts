@@ -152,6 +152,26 @@ export function parseCommunityNpubs(raw: string): string[] {
   return result;
 }
 
+export function mergeCommunityHTags(
+  tags: string[][],
+  hexPubkeys: string[],
+): string[][] {
+  const existing = new Set(
+    tags
+      .filter((t) => t[0] === "h")
+      .map((t) => (t[1] ?? "").toLowerCase()),
+  );
+  const result = tags.map((t) => [...t]);
+  for (const hex of hexPubkeys) {
+    const norm = hex.toLowerCase();
+    if (!existing.has(norm)) {
+      result.push(["h", hex]);
+      existing.add(norm);
+    }
+  }
+  return result;
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
 async function fetchWpPosts(): Promise<WpPost[]> {
