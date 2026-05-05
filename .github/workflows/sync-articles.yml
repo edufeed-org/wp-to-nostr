@@ -1,0 +1,49 @@
+name: WordPress → Nostr Article Sync
+
+on:
+  schedule:
+    # Alle 6 Stunden synchronisieren (versetzt zu sync.yml, damit nicht beide gleichzeitig laufen)
+    - cron: '30 */6 * * *'
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry Run – Events anzeigen, aber NICHT auf Nostr posten'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      force_republish:
+        description: 'Force Republish – created_at = now, ersetzt alle Events einmalig (auch unveränderte)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: WordPress → Nostr Long-Form-Articles synchronisieren
+        env:
+          NOSTR_PRIVATE_KEY: ${{ secrets.NOSTR_PRIVATE_KEY }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          FORCE_REPUBLISH: ${{ inputs.force_republish || 'false' }}
+          SYNC_MODE: article
+          WP_API_URL: ${{ vars.WP_API_URL || 'https://relilab.org/wp-json/wp/v2/posts' }}
+          WP_CATEGORY: ${{ vars.WP_ARTICLE_CATEGORY || '6' }}
+          NOSTR_RELAY: ${{ vars.WP_NOSTR_RELAY || 'wss://relay-rpi.edufeed.org' }}
+          EXTRA_HASHTAGS: ${{ vars.WP_EXTRA_HASHTAGS || 'relilab' }}
+          COMMUNITY_NPUBS: ${{ vars.WP_COMMUNITY_NPUBS || 'npub1fpcxaz2wvjl90gjs60x37ny2pa5u4yqfx7fklz73rgfjnnfujl3sr2fxgk' }}
+        run: deno task start

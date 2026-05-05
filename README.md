@@ -70,8 +70,10 @@ NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
 |--------------------|---------------|---------------------------------------------------|-----------------------------------------|
 | `NOSTR_PRIVATE_KEY`| Live-Modus ✅ | –                                                 | `nsec1…` oder 64-stellige Hex-Zeichenkette |
 | `DRY_RUN`          | –             | `false`                                           | `true` → nur anzeigen, nicht posten     |
+| `FORCE_REPUBLISH`  | –             | `false`                                           | `true` → `created_at = now`, ersetzt rückwirkend alle Events einmalig |
+| `SYNC_MODE`        | –             | `calendar`                                        | `calendar` (kind:31923 Termine) oder `article` (kind:30023 Long-Form) |
 | `WP_API_URL`       | –             | `https://relilab.org/wp-json/wp/v2/posts`         | WordPress REST-API-Endpunkt             |
-| `WP_CATEGORY`      | –             | `176`                                             | WordPress-Kategorie-ID                  |
+| `WP_CATEGORY`      | –             | `176`                                             | WordPress-Kategorie-ID (Termine: 176; Lernmodule: 6) |
 | `NOSTR_RELAY`      | –             | `wss://relay-rpi.edufeed.org`                     | Ziel-Relay (WSS-URL)                    |
 | `EXTRA_HASHTAGS`  | –             | `""` (Workflow: `relilab`)                        | Komma-separierte Hashtag-Liste, wird jedem Event als `t`-Tag angehängt, falls nicht ohnehin aus WordPress-Tags vorhanden. Case-insensitive Dedup. |
 | `COMMUNITY_NPUBS` | –             | `""` (Workflow: relilab-npub)                     | Komma-separierte Liste von Community-Pubkeys (npub1… oder Hex), die als `h`-Tag (Communikey-Spec) an jedes Event angehängt werden. |
@@ -103,16 +105,40 @@ Für sofortigen Rewrite aller Events `cleanup-relay.ts` + Re-Sync nutzen.
 
 ## GitHub Actions
 
-Der Workflow `.github/workflows/sync.yml` synchronisiert automatisch alle 6 Stunden.
+Es laufen zwei voneinander unabhängige Workflows alle 6 Stunden:
+
+- **`.github/workflows/sync.yml`** — Termine-Sync (`SYNC_MODE=calendar`,
+  `WP_CATEGORY=176`, kind:31923). Cron-Offset: `:00`.
+- **`.github/workflows/sync-articles.yml`** — Article-Sync (`SYNC_MODE=article`,
+  `WP_CATEGORY=6` Lernmodule, kind:30023 Long-Form). Cron-Offset: `:30`.
+
+Beide nutzen denselben Sync-npub (`NOSTR_PRIVATE_KEY`-Secret), unterscheiden
+sich nur durch Env-Variablen.
 
 ### Einrichtung
 
 1. **Secret anlegen:** Repository → Settings → Secrets → Actions → `NOSTR_PRIVATE_KEY`
-2. **Optional – Variables:** `WP_API_URL`, `WP_CATEGORY`, `WP_NOSTR_RELAY` als Repository-Variables setzen, um die Defaults zu überschreiben
-3. **Manueller Test:** Actions → „WordPress → Nostr Sync" → „Run workflow" → Dry Run = `true`
+2. **Optional – Variables:** `WP_API_URL`, `WP_CATEGORY` (Termine), `WP_ARTICLE_CATEGORY` (Beiträge), `WP_NOSTR_RELAY`, `WP_EXTRA_HASHTAGS`, `WP_COMMUNITY_NPUBS` als Repository-Variables setzen, um die Defaults zu überschreiben
+3. **Manueller Test:** Actions → „WordPress → Nostr Sync" / „WordPress → Nostr Article Sync" → „Run workflow" → Dry Run = `true`
 4. **Live schalten:** Workflow erneut starten mit Dry Run = `false`
 
-Der Cron-Job läuft automatisch im Live-Modus (`DRY_RUN=false`).
+Beide Cron-Jobs laufen automatisch im Live-Modus (`DRY_RUN=false`).
+
+### Article-Sync: Autorenzuschreibung
+
+Long-Form-Articles erhalten am Anfang des Markdown-Contents einen
+Header-Block, der WP-Autor*in und Quelle sichtbar macht:
+
+```markdown
+> Erstellt von: [Corinna Ullmann](https://relilab.org/author/colibri/)
+> Veröffentlicht auf [relilab.org](https://relilab.org/lernmodul-test/)
+
+(eigentlicher Content folgt …)
+```
+
+Solange keine eigenen Autoren-npubs existieren, signiert der Bot-npub. Die
+Zuschreibung im Text bleibt sichtbar und kann später durch echte
+pubkey-Zuordnung ersetzt werden.
 
 ## Projektstruktur
 
