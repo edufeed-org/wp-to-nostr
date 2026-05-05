@@ -102,6 +102,26 @@ export function parseExtraHashtags(raw: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+export function mergeExtraHashtags(
+  tags: string[][],
+  extras: string[],
+): string[][] {
+  const existing = new Set(
+    tags
+      .filter((t) => t[0] === "t")
+      .map((t) => (t[1] ?? "").toLowerCase()),
+  );
+  const result = tags.map((t) => [...t]);
+  for (const extra of extras) {
+    const norm = extra.toLowerCase();
+    if (!existing.has(norm)) {
+      result.push(["t", extra]);
+      existing.add(norm);
+    }
+  }
+  return result;
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
 async function fetchWpPosts(): Promise<WpPost[]> {
