@@ -15,6 +15,14 @@ on:
         options:
           - 'true'
           - 'false'
+      force_republish:
+        description: 'Force Republish – created_at = now, ersetzt alle Events einmalig (auch unveränderte)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 jobs:
   sync:
@@ -31,6 +39,7 @@ jobs:
         env:
           NOSTR_PRIVATE_KEY: ${{ secrets.NOSTR_PRIVATE_KEY }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          FORCE_REPUBLISH: ${{ inputs.force_republish || 'false' }}
           WP_API_URL: ${{ vars.WP_API_URL || 'https://relilab.org/wp-json/wp/v2/posts' }}
           WP_CATEGORY: ${{ vars.WP_CATEGORY || '176' }}
           NOSTR_RELAY: ${{ vars.WP_NOSTR_RELAY || 'wss://relay-rpi.edufeed.org' }}
