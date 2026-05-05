@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
+#!/usr/bin/env -S deno run --allow-net --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,FORCE_REPUBLISH,SYNC_MODE,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS
 /**
  * wp-to-nostr.ts
  *
@@ -36,6 +36,7 @@ interface WpPost {
   title: { rendered: string };
   content: { rendered: string };
   excerpt: { rendered: string };
+  date_gmt: string;
   modified_gmt: string;
   acf?: {
     relilab_startdate?: string;
@@ -44,7 +45,12 @@ interface WpPost {
   };
   featured_image_urls_v2?: { thumbnail?: string[] };
   taxonomy_info?: { post_tag?: Array<{ label: string }> };
+  _embedded?: {
+    author?: Array<{ name?: string; link?: string }>;
+  };
 }
+
+type SyncMode = "calendar" | "article";
 
 interface NostrEventTemplate {
   kind: number;
@@ -60,6 +66,9 @@ const WP_CATEGORY = Deno.env.get("WP_CATEGORY") ?? "176";
 const NOSTR_RELAY = Deno.env.get("NOSTR_RELAY") ?? "wss://relay-rpi.edufeed.org";
 const DRY_RUN     = Deno.env.get("DRY_RUN") === "true";
 const FORCE_REPUBLISH = Deno.env.get("FORCE_REPUBLISH") === "true";
+const SYNC_MODE: SyncMode = (Deno.env.get("SYNC_MODE") ?? "calendar") === "article"
+  ? "article"
+  : "calendar";
 const PRIVKEY_RAW = Deno.env.get("NOSTR_PRIVATE_KEY") ?? "";
 const EXTRA_HASHTAGS_RAW = Deno.env.get("EXTRA_HASHTAGS") ?? "";
 const COMMUNITY_NPUBS_RAW = Deno.env.get("COMMUNITY_NPUBS") ?? "";
@@ -189,9 +198,18 @@ async function fetchWpPosts(): Promise<WpPost[]> {
   const base = new URL(WP_API_URL);
   base.searchParams.set("categories", WP_CATEGORY);
   base.searchParams.set("per_page",   "100");          // WordPress-Maximum
-  base.searchParams.set("meta_key",   "relilab_startdate");
-  base.searchParams.set("orderby",    "meta_value");
-  base.searchParams.set("order",      "desc");
+
+  if (SYNC_MODE === "calendar") {
+    // Termine: nach relilab_startdate sortieren (ACF-Custom-Field)
+    base.searchParams.set("meta_key", "relilab_startdate");
+    base.searchParams.set("orderby",  "meta_value");
+    base.searchParams.set("order",    "desc");
+  } else {
+    // Article: nach Veröffentlichungsdatum, mit Autor-Embed
+    base.searchParams.set("orderby", "date");
+    base.searchParams.set("order",   "desc");
+    base.searchParams.set("_embed",  "author");
+  }
 
   const all: WpPost[] = [];
   let page = 1;
@@ -246,9 +264,35 @@ function wpDateToUnix(dateStr: string | undefined): number {
   return Math.floor((naiveUtc.getTime() + offsetMs) / 1000);
 }
 
+// ── created_at-Berechnung (gemeinsam für Calendar + Article) ─────────────────
+// kind:31923 und kind:30023 sind beide adressierbar — gleicher d-Tag +
+// gleicher/älterer created_at → Relay ignoriert das Event, höherer →
+// Relay ersetzt. Wir nutzen modified_gmt mit einem 2025-01-01-Floor, damit
+// alte Posts nicht "too early" abgelehnt werden. FORCE_REPUBLISH=true
+// überschreibt einmalig mit Date.now(), für rückwirkende Anreicherungen.
+
+function computeCreatedAt(modifiedGmt: string): number {
+  const MIN_CREATED_AT = 1735689600;  // 2025-01-01T00:00:00Z
+  const modifiedAt = Math.floor(
+    new Date(modifiedGmt + "Z").getTime() / 1000
+  ) || Math.floor(Date.now() / 1000);
+  return FORCE_REPUBLISH
+    ? Math.floor(Date.now() / 1000)
+    : Math.max(modifiedAt, MIN_CREATED_AT);
+}
+
+// ── HTML-Entitäten in Titel dekodieren ───────────────────────────────────────
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCharCode(Number(dec)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g,  "<")
+    .replace(/&gt;/g,  ">");
+}
+
 // ── WordPress-Post → Nostr-Event mappen ──────────────────────────────────────
 
-function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
+function mapPostToCalendarEvent(post: WpPost): NostrEventTemplate | null {
   const startTs = wpDateToUnix(post.acf?.relilab_startdate);
   const endTs   = wpDateToUnix(post.acf?.relilab_enddate);
 
@@ -259,11 +303,7 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   const wpUrl = post.link ?? post.guid?.rendered ?? String(post.id);
 
   // Titel bereinigen (HTML-Entitäten dekodieren)
-  const title = (post.title?.rendered ?? "")
-    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCharCode(Number(dec)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g,  "<")
-    .replace(/&gt;/g,  ">");
+  const title = decodeHtmlEntities(post.title?.rendered ?? "");
 
   // HTML → Markdown
   const contentMd = htmlToMarkdown(post.content?.rendered ?? "");
@@ -298,30 +338,69 @@ function mapPostToNostrEvent(post: WpPost): NostrEventTemplate | null {
   let enrichedTags = mergeExtraHashtags(tags, EXTRA_HASHTAGS);
   enrichedTags = mergeCommunityHTags(enrichedTags, COMMUNITY_HEX_PUBKEYS);
 
-  // created_at = modified_gmt → Relay ersetzt nur wenn WP-Post sich geändert hat
-  // (kind:31923 ist adressierbar-ersetzbar: gleicher d-Tag + gleicher/älterer
-  //  created_at → Relay ignoriert das Event, höherer created_at → Relay ersetzt)
-  //
-  // Fallback: Viele Relays lehnen Events ab deren created_at zu weit in der
-  // Vergangenheit liegt ("created_at too early"). Für alte Posts verwenden wir
-  // einen festen Mindestwert (2025-01-01), damit:
-  //   1. alte unveränderte Posts trotzdem akzeptiert werden
-  //   2. der Wert stabil bleibt (gleicher created_at bei jedem Run → Deduplizierung)
-  // Wird ein alter Post in WP bearbeitet, steigt modified_gmt über den Floor
-  // und der natürliche Wert greift wieder.
-  //
-  // FORCE_REPUBLISH=true überschreibt das einmalig mit Date.now(), damit der
-  // Relay alle Events (auch unveränderte) durch frische Versionen ersetzt –
-  // nützlich nach Anreicherungs-Änderungen, die rückwirkend gelten sollen.
-  const MIN_CREATED_AT = 1735689600;  // 2025-01-01T00:00:00Z
-  const modifiedAt = Math.floor(
-    new Date(post.modified_gmt + "Z").getTime() / 1000
-  ) || Math.floor(Date.now() / 1000);
-  const createdAt = FORCE_REPUBLISH
-    ? Math.floor(Date.now() / 1000)
-    : Math.max(modifiedAt, MIN_CREATED_AT);
+  return {
+    kind: 31923,
+    created_at: computeCreatedAt(post.modified_gmt),
+    tags: enrichedTags,
+    content: contentMd,
+  };
+}
 
-  return { kind: 31923, created_at: createdAt, tags: enrichedTags, content: contentMd };
+// ── WordPress-Post → Nostr Long-Form-Article (kind:30023) ────────────────────
+// Für Beiträge ohne Termin-Charakter (z. B. Lernmodule, Blog-Posts).
+// Autor*in wird als Markdown-Header oben in den Content eingefügt — solange
+// keine eigenen Autoren-npubs existieren, bleibt die Zuschreibung im Text
+// sichtbar und kann später durch echte pubkey-Zuordnung ersetzt werden.
+export function mapPostToArticleEvent(post: WpPost): NostrEventTemplate {
+  const wpUrl = post.link ?? post.guid?.rendered ?? String(post.id);
+  const title = decodeHtmlEntities(post.title?.rendered ?? "");
+  const contentMd = htmlToMarkdown(post.content?.rendered ?? "");
+  const summaryMd = htmlToMarkdown(post.excerpt?.rendered ?? "");
+  const image = post.featured_image_urls_v2?.thumbnail?.[0] ?? "";
+
+  // published_at: WP-Veröffentlichungs-Zeitstempel (date_gmt) — bleibt stabil,
+  // unabhängig von späteren Bearbeitungen. created_at hingegen reflektiert
+  // die letzte Änderung (für Replace-Logik).
+  const publishedAt = Math.floor(
+    new Date(post.date_gmt + "Z").getTime() / 1000
+  ) || Math.floor(Date.now() / 1000);
+
+  // Autor-Header in den Content packen — sichtbare Zuschreibung
+  const author = post._embedded?.author?.[0];
+  const authorName = author?.name ?? "";
+  const authorLink = author?.link ?? "";
+  const authorLine = authorName
+    ? authorLink
+      ? `> Erstellt von: [${authorName}](${authorLink})`
+      : `> Erstellt von: ${authorName}`
+    : "";
+  const sourceLine = `> Veröffentlicht auf [relilab.org](${wpUrl})`;
+  const headerBlock = [authorLine, sourceLine].filter(Boolean).join("\n") + "\n\n";
+  const fullContent = headerBlock + contentMd;
+
+  const keywordTags = (post.taxonomy_info?.post_tag ?? [])
+    .map((t) => ["t", t.label]);
+
+  // Nostr-Tags-Array (NIP-23 / kind 30023)
+  const tags: string[][] = [
+    ["d",            wpUrl],
+    ["title",        title],
+    ["published_at", String(publishedAt)],
+  ];
+  if (summaryMd) tags.push(["summary", summaryMd]);
+  if (image)     tags.push(["image", image]);
+  tags.push(["r", wpUrl]);
+  tags.push(...keywordTags);
+
+  let enrichedTags = mergeExtraHashtags(tags, EXTRA_HASHTAGS);
+  enrichedTags = mergeCommunityHTags(enrichedTags, COMMUNITY_HEX_PUBKEYS);
+
+  return {
+    kind: 30023,
+    created_at: computeCreatedAt(post.modified_gmt),
+    tags: enrichedTags,
+    content: fullContent,
+  };
 }
 
 // ── Auf Nostr veröffentlichen ─────────────────────────────────────────────────
@@ -339,7 +418,11 @@ async function publishEvent(
 // ── Hauptprogramm ─────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  console.log("\n🔄 WordPress → Nostr Sync");
+  const modeLabel = SYNC_MODE === "article"
+    ? "📰 Article-Sync (kind:30023 Long-Form)"
+    : "📅 Calendar-Sync (kind:31923 Termine)";
+
+  console.log(`\n🔄 WordPress → Nostr Sync — ${modeLabel}`);
   console.log(`   Relay : ${NOSTR_RELAY}`);
   console.log(`   Modus : ${DRY_RUN
     ? "🧪 DRY RUN – keine Events werden tatsächlich gesendet"
@@ -358,11 +441,14 @@ async function main(): Promise<void> {
   const posts = await fetchWpPosts();
   console.log(`   ${posts.length} Posts gefunden\n`);
 
-  // 2. Filtern & mappen
-  const events = posts.map(mapPostToNostrEvent).filter(
-    (e): e is NostrEventTemplate => e !== null
-  );
-  console.log(`📅 ${events.length} Termine zum Synchronisieren\n`);
+  // 2. Filtern & mappen — je nach SYNC_MODE
+  const events: NostrEventTemplate[] = SYNC_MODE === "article"
+    ? posts.map(mapPostToArticleEvent)
+    : posts.map(mapPostToCalendarEvent).filter(
+        (e): e is NostrEventTemplate => e !== null,
+      );
+  const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
+  console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
 
   if (events.length === 0) {
     console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
@@ -385,11 +471,18 @@ async function main(): Promise<void> {
   try {
     for (const evt of events) {
       const title    = evt.tags.find((t) => t[0] === "title")?.[1]   ?? "(kein Titel)";
-      const startSec = Number(evt.tags.find((t) => t[0] === "start")?.[1] ?? 0);
-      const startStr = startSec ? new Date(startSec * 1000).toISOString() : "?";
-
       console.log(`  📌 "${title}"`);
-      console.log(`     Start : ${startStr}`);
+
+      // Calendar: Start-Zeit anzeigen. Article: published_at.
+      if (SYNC_MODE === "article") {
+        const pubSec = Number(evt.tags.find((t) => t[0] === "published_at")?.[1] ?? 0);
+        const pubStr = pubSec ? new Date(pubSec * 1000).toISOString().slice(0, 10) : "?";
+        console.log(`     Veröff.: ${pubStr}`);
+      } else {
+        const startSec = Number(evt.tags.find((t) => t[0] === "start")?.[1] ?? 0);
+        const startStr = startSec ? new Date(startSec * 1000).toISOString() : "?";
+        console.log(`     Start : ${startStr}`);
+      }
 
       if (DRY_RUN) {
         console.log("     [DRY RUN] Tags:", JSON.stringify(evt.tags));
