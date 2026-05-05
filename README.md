@@ -73,6 +73,33 @@ NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
 | `WP_API_URL`       | –             | `https://relilab.org/wp-json/wp/v2/posts`         | WordPress REST-API-Endpunkt             |
 | `WP_CATEGORY`      | –             | `176`                                             | WordPress-Kategorie-ID                  |
 | `NOSTR_RELAY`      | –             | `wss://relay-rpi.edufeed.org`                     | Ziel-Relay (WSS-URL)                    |
+| `EXTRA_HASHTAGS`  | –             | `""` (Workflow: `relilab`)                        | Komma-separierte Hashtag-Liste, wird jedem Event als `t`-Tag angehängt, falls nicht ohnehin aus WordPress-Tags vorhanden. Case-insensitive Dedup. |
+| `COMMUNITY_NPUBS` | –             | `""` (Workflow: relilab-npub)                     | Komma-separierte Liste von Community-Pubkeys (npub1… oder Hex), die als `h`-Tag (Communikey-Spec) an jedes Event angehängt werden. |
+
+## Tag-Anreicherung
+
+Jedes Event wird vor dem Publish um zwei optionale Tag-Gruppen ergänzt:
+
+- **`t`-Tags (Hashtags)** aus `EXTRA_HASHTAGS`. Bestehende Hashtags aus den
+  WordPress-Tags werden case-insensitive dedupliziert (`Relilab` aus WP
+  blockt `relilab` aus der Konfig).
+- **`h`-Tags (Community-Zuordnung nach Communikey-Spec)** aus
+  `COMMUNITY_NPUBS`. npubs werden beim Start zu Hex aufgelöst; pro
+  Community ein `h`-Tag.
+
+Beide Defaults leben in `.github/workflows/sync.yml` (relilab-spezifisch) —
+der Code-Default ist leer. Forks setzen entweder die Repo-Variablen
+`WP_EXTRA_HASHTAGS` / `WP_COMMUNITY_NPUBS` oder editieren den Workflow.
+
+**Hinweis zur Sichtbarkeit:** Die Communikey-Spec setzt voraus, dass das
+Ziel-Relay nicht im `enforced`-Modus läuft, oder dass der Sync-npub auf der
+relevanten Profile-List der Community steht. Bei `enforced`-Relays ohne
+Eintrag werden Events sonst stumm verworfen. Aktuell trifft das auf
+`relay-rpi.edufeed.org` nicht zu.
+
+**Altbestand:** Bestehende Events erhalten den neuen Tag erst, wenn der
+zugehörige WordPress-Post wieder gespeichert wird (`modified_gmt` steigt).
+Für sofortigen Rewrite aller Events `cleanup-relay.ts` + Re-Sync nutzen.
 
 ## GitHub Actions
 
