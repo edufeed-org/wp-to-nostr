@@ -93,6 +93,15 @@ function htmlToMarkdown(html: string): string {
   return turndown.turndown(html).trim();
 }
 
+// ── Hashtag-Anreicherung ──────────────────────────────────────────────────────
+
+export function parseExtraHashtags(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().replace(/^#/, ""))
+    .filter((entry) => entry.length > 0);
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
 async function fetchWpPosts(): Promise<WpPost[]> {
@@ -329,7 +338,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: Error) => {
-  console.error("\n💥 Fatal:", err.message);
-  Deno.exit(1);
-});
+if (import.meta.main) {
+  main().catch((err: Error) => {
+    console.error("\n💥 Fatal:", err.message);
+    Deno.exit(1);
+  });
+}

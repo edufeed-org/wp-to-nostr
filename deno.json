@@ -5,7 +5,7 @@
     "inspect": "deno run --allow-net --allow-env=WP_API_URL,WP_CATEGORY,WP_PAGE,EXTRA_HASHTAGS,COMMUNITY_NPUBS inspect-mapping.ts",
     "cleanup":     "NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
     "cleanup-dry": "DRY_RUN=true NOSTR_PRIVATE_KEY=$NOSTR_PRIVATE_KEY deno run --allow-net --allow-env cleanup-relay.ts",
-    "test":    "deno test tests/"
+    "test":    "deno test --allow-env=NOSTR_PRIVATE_KEY,DRY_RUN,WP_API_URL,WP_CATEGORY,NOSTR_RELAY,EXTRA_HASHTAGS,COMMUNITY_NPUBS tests/"
   },
   "imports": {
     "nostr-tools":       "npm:nostr-tools@^2.10.4",
