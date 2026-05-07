@@ -3,7 +3,7 @@ import { buildWpUrl } from "../wp-to-nostr.ts";
 
 const BASE = "https://relilab.org/wp-json/wp/v2/posts";
 
-Deno.test("buildWpUrl: calendar-Mode setzt meta_key/meta_value-Sortierung", () => {
+Deno.test("buildWpUrl: calendar-Mode → setzt meta_key/meta_value-Sortierung", () => {
   const url = buildWpUrl({
     apiUrl: BASE,
     category: "176",
@@ -19,7 +19,7 @@ Deno.test("buildWpUrl: calendar-Mode setzt meta_key/meta_value-Sortierung", () =
   assertEquals(u.searchParams.get("page"), "1");
 });
 
-Deno.test("buildWpUrl: article-Mode nutzt date-Sortierung mit author-embed", () => {
+Deno.test("buildWpUrl: article-Mode → nutzt date-Sortierung mit author-embed", () => {
   const url = buildWpUrl({
     apiUrl: BASE,
     category: "6",

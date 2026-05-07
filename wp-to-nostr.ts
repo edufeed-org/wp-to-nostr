@@ -240,10 +240,12 @@ export function buildWpUrl(opts: BuildWpUrlOpts): string {
   url.searchParams.set("per_page", "100");
 
   if (opts.syncMode === "calendar") {
+    // Termine: nach relilab_startdate sortieren (ACF-Custom-Field)
     url.searchParams.set("meta_key", "relilab_startdate");
     url.searchParams.set("orderby", "meta_value");
     url.searchParams.set("order", "desc");
   } else {
+    // Article: nach Veröffentlichungsdatum, mit Autor-Embed
     url.searchParams.set("orderby", "date");
     url.searchParams.set("order", "desc");
     url.searchParams.set("_embed", "author");
