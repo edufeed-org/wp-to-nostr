@@ -52,6 +52,10 @@ interface WpPost {
 
 type SyncMode = "calendar" | "article";
 
+export function kindForSyncMode(mode: SyncMode): number {
+  return mode === "article" ? 30023 : 31923;
+}
+
 interface NostrEventTemplate {
   kind: number;
   created_at: number;
