@@ -597,46 +597,16 @@ async function main(): Promise<void> {
     ? "🧪 DRY RUN – keine Events werden tatsächlich gesendet"
     : "🚀 LIVE – Events werden auf Nostr veröffentlicht"}\n`);
 
-  // Privaten Schlüssel nur im Live-Modus laden
+  // Privkey/Pubkey nur im Live-Modus
   let privkey: Uint8Array | null = null;
+  let pubkeyHex: string | null = null;
   if (!DRY_RUN) {
     privkey = resolvePrivkey(PRIVKEY_RAW);
-    const pubkey = getPublicKey(privkey);
-    console.log(`🔑 Öffentlicher Schlüssel (hex): ${pubkey}\n`);
+    pubkeyHex = getPublicKey(privkey);
+    console.log(`🔑 Öffentlicher Schlüssel (hex): ${pubkeyHex}\n`);
   }
 
-  // 1. WordPress-Posts holen
-  console.log("📥 WordPress-Posts abrufen …");
-  const posts = await fetchWpPosts();
-  console.log(`   ${posts.length} Posts gefunden\n`);
-
-  // 2. Filtern & mappen — je nach SYNC_MODE
-  const events: NostrEventTemplate[] = SYNC_MODE === "article"
-    ? posts.map(mapPostToArticleEvent)
-    : posts.map(mapPostToCalendarEvent).filter(
-        (e): e is NostrEventTemplate => e !== null,
-      );
-  const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
-  console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
-
-  if (events.length === 0) {
-    console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
-    return;
-  }
-
-  // 3. Veröffentlichen oder Dry-Run-Ausgabe
-  // Pro Relay separat zählen, plus Gesamt-Erfolg pro Event (mind. 1 Relay
-  // hat das Event akzeptiert). Schickt das Event aber an alle Relays parallel.
-  const perRelayStats = new Map<string, { ok: number; skipped: number; failed: number }>();
-  for (const url of NOSTR_RELAYS) {
-    perRelayStats.set(url, { ok: 0, skipped: 0, failed: 0 });
-  }
-  let eventsAcceptedSomewhere = 0;
-  let eventsRejectedEverywhere = 0;
-
-  // Verbindungs-Pool aufbauen — eine Connection pro Relay, geteilt über alle
-  // Events. Failures beim Connect werden nicht fatal: das Relay wird mit
-  // null markiert und beim Publish übersprungen.
+  // Relay-Pool VOR dem WP-Fetch aufbauen, damit wir den Cutoff bestimmen können.
   const relayPool: Array<{ url: string; relay: Relay | null }> = [];
   if (!DRY_RUN) {
     console.log(`🔌 Verbinde mit ${NOSTR_RELAYS.length} Relay(s) …`);
@@ -654,11 +624,58 @@ async function main(): Promise<void> {
   }
 
   try {
+    // Cutoff für inkrementellen Sync ermitteln.
+    let cutoff: Date | undefined = undefined;
+    if (!FORCE_REPUBLISH && !DRY_RUN && pubkeyHex) {
+      console.log("🔎 Letzten Sync-Zeitstempel von Relays abfragen …");
+      const lastTs = await getLastSyncTimestamp(
+        relayPool,
+        pubkeyHex,
+        kindForSyncMode(SYNC_MODE),
+      );
+      if (lastTs !== null) {
+        // 60s Sicherheitspuffer gegen Clock-Drift.
+        cutoff = new Date((lastTs - 60) * 1000);
+        console.log(`   Letztes Event: ${new Date(lastTs * 1000).toISOString()}`);
+        console.log(`   Cutoff (−60s): ${cutoff.toISOString()}\n`);
+      } else {
+        console.log("   Kein gemeinsamer Cutoff verfügbar → Vollsync.\n");
+      }
+    } else if (FORCE_REPUBLISH) {
+      console.log("⚡ FORCE_REPUBLISH=true → Filter wird übersprungen, Vollsync.\n");
+    }
+
+    // 1. WordPress-Posts holen (optional gefiltert)
+    console.log("📥 WordPress-Posts abrufen …");
+    const posts = await fetchWpPosts(cutoff);
+    console.log(`   ${posts.length} Posts gefunden\n`);
+
+    // 2. Filtern & mappen
+    const events: NostrEventTemplate[] = SYNC_MODE === "article"
+      ? posts.map(mapPostToArticleEvent)
+      : posts.map(mapPostToCalendarEvent).filter(
+          (e): e is NostrEventTemplate => e !== null,
+        );
+    const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
+    console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
+
+    if (events.length === 0) {
+      console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
+      return;
+    }
+
+    // 3. Veröffentlichen oder Dry-Run-Ausgabe
+    const perRelayStats = new Map<string, { ok: number; skipped: number; failed: number }>();
+    for (const url of NOSTR_RELAYS) {
+      perRelayStats.set(url, { ok: 0, skipped: 0, failed: 0 });
+    }
+    let eventsAcceptedSomewhere = 0;
+    let eventsRejectedEverywhere = 0;
+
     for (const evt of events) {
-      const title    = evt.tags.find((t) => t[0] === "title")?.[1]   ?? "(kein Titel)";
+      const title = evt.tags.find((t) => t[0] === "title")?.[1] ?? "(kein Titel)";
       console.log(`  📌 "${title}"`);
 
-      // Calendar: Start-Zeit anzeigen. Article: published_at.
       if (SYNC_MODE === "article") {
         const pubSec = Number(evt.tags.find((t) => t[0] === "published_at")?.[1] ?? 0);
         const pubStr = pubSec ? new Date(pubSec * 1000).toISOString().slice(0, 10) : "?";
@@ -698,24 +715,24 @@ async function main(): Promise<void> {
       }
       console.log();
     }
+
+    // Zusammenfassung
+    console.log("📊 Zusammenfassung:");
+    if (DRY_RUN) {
+      console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
+    } else {
+      console.log(`   ${eventsAcceptedSomewhere}/${events.length} Events von mindestens einem Relay akzeptiert`);
+      if (eventsRejectedEverywhere > 0) {
+        console.log(`   ⚠️  ${eventsRejectedEverywhere} Events von keinem Relay akzeptiert`);
+      }
+      console.log(`   Pro Relay:`);
+      for (const [url, s] of perRelayStats) {
+        console.log(`     ${url}: ${s.ok} ok · ${s.skipped} skipped · ${s.failed} failed`);
+      }
+    }
   } finally {
     for (const { relay } of relayPool) relay?.close();
-    if (!DRY_RUN) console.log("🔌 Relay-Verbindungen geschlossen\n");
-  }
-
-  // Zusammenfassung
-  console.log("📊 Zusammenfassung:");
-  if (DRY_RUN) {
-    console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
-  } else {
-    console.log(`   ${eventsAcceptedSomewhere}/${events.length} Events von mindestens einem Relay akzeptiert`);
-    if (eventsRejectedEverywhere > 0) {
-      console.log(`   ⚠️  ${eventsRejectedEverywhere} Events von keinem Relay akzeptiert`);
-    }
-    console.log(`   Pro Relay:`);
-    for (const [url, s] of perRelayStats) {
-      console.log(`     ${url}: ${s.ok} ok · ${s.skipped} skipped · ${s.failed} failed`);
-    }
+    if (!DRY_RUN) console.log("\n🔌 Relay-Verbindungen geschlossen");
   }
 }
 
