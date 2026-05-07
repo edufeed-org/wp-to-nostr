@@ -224,6 +224,85 @@ export function mergeCommunityHTags(
   return result;
 }
 
+// ── Letzten Sync-Zeitstempel pro Relay ermitteln ─────────────────────────────
+// Fragt jedes Relay nach dem neuesten eigenen Event des angegebenen kind und
+// nimmt das Minimum über alle Relays. Wenn auch nur ein Relay leer ist oder
+// einen Fehler liefert: Rückgabe null → der Caller macht einen Vollsync.
+
+export interface RelayLike {
+  subscribe(
+    filters: Array<Record<string, unknown>>,
+    handlers: {
+      onevent?: (event: { created_at: number }) => void;
+      oneose?: () => void;
+    },
+  ): { close: () => void };
+}
+
+const RELAY_QUERY_TIMEOUT_MS = 5000;
+
+export async function getLastSyncTimestamp(
+  pool: Array<{ url: string; relay: RelayLike | null }>,
+  pubkeyHex: string,
+  kind: number,
+): Promise<number | null> {
+  if (pool.length === 0) return null;
+
+  const perRelay = await Promise.all(
+    pool.map(({ url, relay }) => queryNewestCreatedAt(url, relay, pubkeyHex, kind)),
+  );
+
+  // Wenn auch nur ein Relay null lieferte: Vollsync.
+  if (perRelay.some((v) => v === null)) return null;
+  return Math.min(...perRelay as number[]);
+}
+
+function queryNewestCreatedAt(
+  url: string,
+  relay: RelayLike | null,
+  pubkeyHex: string,
+  kind: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (!relay) {
+      resolve(null);
+      return;
+    }
+
+    let newest: number | null = null;
+    let done = false;
+
+    const finish = (value: number | null) => {
+      if (done) return;
+      done = true;
+      try { sub?.close(); } catch { /* ignore */ }
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      console.warn(`     ⚠️  ${url}: Timeout beim Abfragen des letzten Events`);
+      finish(null);
+    }, RELAY_QUERY_TIMEOUT_MS);
+
+    let sub: { close: () => void } | undefined;
+    try {
+      sub = relay.subscribe(
+        [{ authors: [pubkeyHex], kinds: [kind], limit: 1 }],
+        {
+          onevent: (evt) => {
+            if (newest === null || evt.created_at > newest) newest = evt.created_at;
+          },
+          oneose: () => finish(newest),
+        },
+      );
+    } catch (err) {
+      console.warn(`     ⚠️  ${url}: ${(err as Error).message}`);
+      finish(null);
+    }
+  });
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
 export interface BuildWpUrlOpts {
