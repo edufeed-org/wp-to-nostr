@@ -643,6 +643,8 @@ async function main(): Promise<void> {
       }
     } else if (FORCE_REPUBLISH) {
       console.log("⚡ FORCE_REPUBLISH=true → Filter wird übersprungen, Vollsync.\n");
+    } else if (DRY_RUN) {
+      console.log("🧪 DRY RUN → kein Cutoff-Query, Vollsync für Anzeige.\n");
     }
 
     // 1. WordPress-Posts holen (optional gefiltert)
