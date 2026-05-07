@@ -226,32 +226,57 @@ export function mergeCommunityHTags(
 
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
-async function fetchWpPosts(): Promise<WpPost[]> {
-  const base = new URL(WP_API_URL);
-  base.searchParams.set("categories", WP_CATEGORY);
-  base.searchParams.set("per_page",   "100");          // WordPress-Maximum
+export interface BuildWpUrlOpts {
+  apiUrl: string;
+  category: string;
+  syncMode: SyncMode;
+  page: number;
+  modifiedAfter?: Date;
+}
 
-  if (SYNC_MODE === "calendar") {
-    // Termine: nach relilab_startdate sortieren (ACF-Custom-Field)
-    base.searchParams.set("meta_key", "relilab_startdate");
-    base.searchParams.set("orderby",  "meta_value");
-    base.searchParams.set("order",    "desc");
+export function buildWpUrl(opts: BuildWpUrlOpts): string {
+  const url = new URL(opts.apiUrl);
+  url.searchParams.set("categories", opts.category);
+  url.searchParams.set("per_page", "100");
+
+  if (opts.syncMode === "calendar") {
+    url.searchParams.set("meta_key", "relilab_startdate");
+    url.searchParams.set("orderby", "meta_value");
+    url.searchParams.set("order", "desc");
   } else {
-    // Article: nach Veröffentlichungsdatum, mit Autor-Embed
-    base.searchParams.set("orderby", "date");
-    base.searchParams.set("order",   "desc");
-    base.searchParams.set("_embed",  "author");
+    url.searchParams.set("orderby", "date");
+    url.searchParams.set("order", "desc");
+    url.searchParams.set("_embed", "author");
   }
 
+  url.searchParams.set("page", String(opts.page));
+
+  if (opts.modifiedAfter) {
+    // ISO-8601 mit "Z" — WP-REST-API (Core ≥ 5.7) akzeptiert UTC-Suffix.
+    // Sekundengenau, ohne Millisekunden.
+    const iso = opts.modifiedAfter.toISOString().replace(/\.\d{3}Z$/, "Z");
+    url.searchParams.set("modified_after", iso);
+  }
+
+  return url.toString();
+}
+
+async function fetchWpPosts(modifiedAfter?: Date): Promise<WpPost[]> {
   const all: WpPost[] = [];
   let page = 1;
   let totalPages = 1;
 
   do {
-    base.searchParams.set("page", String(page));
-    console.log(`  Seite ${page}/${totalPages} – ${base}`);
+    const url = buildWpUrl({
+      apiUrl: WP_API_URL,
+      category: WP_CATEGORY,
+      syncMode: SYNC_MODE,
+      page,
+      modifiedAfter,
+    });
+    console.log(`  Seite ${page}/${totalPages} – ${url}`);
 
-    const res = await fetch(base.toString());
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`WordPress API Fehler (Seite ${page}): ${res.status} ${res.statusText}`);
 
     // Gesamtseitenanzahl aus Response-Header lesen
