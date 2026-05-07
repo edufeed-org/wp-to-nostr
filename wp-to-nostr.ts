@@ -52,6 +52,10 @@ interface WpPost {
 
 type SyncMode = "calendar" | "article";
 
+export function kindForSyncMode(mode: SyncMode): number {
+  return mode === "article" ? 30023 : 31923;
+}
+
 interface NostrEventTemplate {
   kind: number;
   created_at: number;
@@ -220,34 +224,145 @@ export function mergeCommunityHTags(
   return result;
 }
 
+// ── Letzten Sync-Zeitstempel pro Relay ermitteln ─────────────────────────────
+// Fragt jedes Relay nach dem neuesten eigenen Event des angegebenen kind und
+// nimmt das Minimum über alle Relays. Wenn auch nur ein Relay leer ist oder
+// einen Fehler liefert: Rückgabe null → der Caller macht einen Vollsync.
+
+export interface RelayLike {
+  subscribe(
+    filters: Array<Record<string, unknown>>,
+    handlers: {
+      onevent?: (event: { created_at: number }) => void;
+      oneose?: () => void;
+    },
+  ): { close: () => void };
+}
+
+const RELAY_QUERY_TIMEOUT_MS = 5000;
+
+export async function getLastSyncTimestamp(
+  pool: Array<{ url: string; relay: RelayLike | null }>,
+  pubkeyHex: string,
+  kind: number,
+): Promise<number | null> {
+  if (pool.length === 0) return null;
+
+  const perRelay = await Promise.all(
+    pool.map(({ url, relay }) => queryNewestCreatedAt(url, relay, pubkeyHex, kind)),
+  );
+
+  // Wenn auch nur ein Relay null lieferte: Vollsync.
+  if (perRelay.some((v) => v === null)) return null;
+  return Math.min(...perRelay as number[]);
+}
+
+function queryNewestCreatedAt(
+  url: string,
+  relay: RelayLike | null,
+  pubkeyHex: string,
+  kind: number,
+): Promise<number | null> {
+  return new Promise((resolve) => {
+    if (!relay) {
+      resolve(null);
+      return;
+    }
+
+    let newest: number | null = null;
+    let done = false;
+
+    const finish = (value: number | null) => {
+      if (done) return;
+      done = true;
+      try { sub?.close(); } catch { /* ignore */ }
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      console.warn(`     ⚠️  ${url}: Timeout beim Abfragen des letzten Events`);
+      finish(null);
+    }, RELAY_QUERY_TIMEOUT_MS);
+
+    let sub: { close: () => void } | undefined;
+    try {
+      sub = relay.subscribe(
+        [{ authors: [pubkeyHex], kinds: [kind], limit: 1 }],
+        {
+          onevent: (evt) => {
+            if (newest === null || evt.created_at > newest) newest = evt.created_at;
+          },
+          oneose: () => finish(newest),
+        },
+      );
+      // Falls subscribe die Handler synchron gerufen hat (finish bereits durch),
+      // war sub zu dem Zeitpunkt noch undefined — jetzt nachträglich schließen.
+      if (done) {
+        try { sub.close(); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.warn(`     ⚠️  ${url}: ${(err as Error).message}`);
+      finish(null);
+    }
+  });
+}
+
 // ── WordPress REST-API (mit Pagination) ──────────────────────────────────────
 
-async function fetchWpPosts(): Promise<WpPost[]> {
-  const base = new URL(WP_API_URL);
-  base.searchParams.set("categories", WP_CATEGORY);
-  base.searchParams.set("per_page",   "100");          // WordPress-Maximum
+export interface BuildWpUrlOpts {
+  apiUrl: string;
+  category: string;
+  syncMode: SyncMode;
+  page: number;
+  modifiedAfter?: Date;
+}
 
-  if (SYNC_MODE === "calendar") {
+export function buildWpUrl(opts: BuildWpUrlOpts): string {
+  const url = new URL(opts.apiUrl);
+  url.searchParams.set("categories", opts.category);
+  url.searchParams.set("per_page", "100");
+
+  if (opts.syncMode === "calendar") {
     // Termine: nach relilab_startdate sortieren (ACF-Custom-Field)
-    base.searchParams.set("meta_key", "relilab_startdate");
-    base.searchParams.set("orderby",  "meta_value");
-    base.searchParams.set("order",    "desc");
+    url.searchParams.set("meta_key", "relilab_startdate");
+    url.searchParams.set("orderby", "meta_value");
+    url.searchParams.set("order", "desc");
   } else {
     // Article: nach Veröffentlichungsdatum, mit Autor-Embed
-    base.searchParams.set("orderby", "date");
-    base.searchParams.set("order",   "desc");
-    base.searchParams.set("_embed",  "author");
+    url.searchParams.set("orderby", "date");
+    url.searchParams.set("order", "desc");
+    url.searchParams.set("_embed", "author");
   }
 
+  url.searchParams.set("page", String(opts.page));
+
+  if (opts.modifiedAfter) {
+    // ISO-8601 mit "Z" — WP-REST-API (Core ≥ 5.7) akzeptiert UTC-Suffix.
+    // Sekundengenau, ohne Millisekunden.
+    const iso = opts.modifiedAfter.toISOString().replace(/\.\d{3}Z$/, "Z");
+    url.searchParams.set("modified_after", iso);
+  }
+
+  return url.toString();
+}
+
+async function fetchWpPosts(modifiedAfter?: Date): Promise<WpPost[]> {
   const all: WpPost[] = [];
   let page = 1;
   let totalPages = 1;
 
   do {
-    base.searchParams.set("page", String(page));
-    console.log(`  Seite ${page}/${totalPages} – ${base}`);
+    const url = buildWpUrl({
+      apiUrl: WP_API_URL,
+      category: WP_CATEGORY,
+      syncMode: SYNC_MODE,
+      page,
+      modifiedAfter,
+    });
+    console.log(`  Seite ${page}/${totalPages} – ${url}`);
 
-    const res = await fetch(base.toString());
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`WordPress API Fehler (Seite ${page}): ${res.status} ${res.statusText}`);
 
     // Gesamtseitenanzahl aus Response-Header lesen
@@ -482,46 +597,16 @@ async function main(): Promise<void> {
     ? "🧪 DRY RUN – keine Events werden tatsächlich gesendet"
     : "🚀 LIVE – Events werden auf Nostr veröffentlicht"}\n`);
 
-  // Privaten Schlüssel nur im Live-Modus laden
+  // Privkey/Pubkey nur im Live-Modus
   let privkey: Uint8Array | null = null;
+  let pubkeyHex: string | null = null;
   if (!DRY_RUN) {
     privkey = resolvePrivkey(PRIVKEY_RAW);
-    const pubkey = getPublicKey(privkey);
-    console.log(`🔑 Öffentlicher Schlüssel (hex): ${pubkey}\n`);
+    pubkeyHex = getPublicKey(privkey);
+    console.log(`🔑 Öffentlicher Schlüssel (hex): ${pubkeyHex}\n`);
   }
 
-  // 1. WordPress-Posts holen
-  console.log("📥 WordPress-Posts abrufen …");
-  const posts = await fetchWpPosts();
-  console.log(`   ${posts.length} Posts gefunden\n`);
-
-  // 2. Filtern & mappen — je nach SYNC_MODE
-  const events: NostrEventTemplate[] = SYNC_MODE === "article"
-    ? posts.map(mapPostToArticleEvent)
-    : posts.map(mapPostToCalendarEvent).filter(
-        (e): e is NostrEventTemplate => e !== null,
-      );
-  const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
-  console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
-
-  if (events.length === 0) {
-    console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
-    return;
-  }
-
-  // 3. Veröffentlichen oder Dry-Run-Ausgabe
-  // Pro Relay separat zählen, plus Gesamt-Erfolg pro Event (mind. 1 Relay
-  // hat das Event akzeptiert). Schickt das Event aber an alle Relays parallel.
-  const perRelayStats = new Map<string, { ok: number; skipped: number; failed: number }>();
-  for (const url of NOSTR_RELAYS) {
-    perRelayStats.set(url, { ok: 0, skipped: 0, failed: 0 });
-  }
-  let eventsAcceptedSomewhere = 0;
-  let eventsRejectedEverywhere = 0;
-
-  // Verbindungs-Pool aufbauen — eine Connection pro Relay, geteilt über alle
-  // Events. Failures beim Connect werden nicht fatal: das Relay wird mit
-  // null markiert und beim Publish übersprungen.
+  // Relay-Pool VOR dem WP-Fetch aufbauen, damit wir den Cutoff bestimmen können.
   const relayPool: Array<{ url: string; relay: Relay | null }> = [];
   if (!DRY_RUN) {
     console.log(`🔌 Verbinde mit ${NOSTR_RELAYS.length} Relay(s) …`);
@@ -539,11 +624,60 @@ async function main(): Promise<void> {
   }
 
   try {
+    // Cutoff für inkrementellen Sync ermitteln.
+    let cutoff: Date | undefined = undefined;
+    if (!FORCE_REPUBLISH && !DRY_RUN && pubkeyHex) {
+      console.log("🔎 Letzten Sync-Zeitstempel von Relays abfragen …");
+      const lastTs = await getLastSyncTimestamp(
+        relayPool,
+        pubkeyHex,
+        kindForSyncMode(SYNC_MODE),
+      );
+      if (lastTs !== null) {
+        // 60s Sicherheitspuffer gegen Clock-Drift.
+        cutoff = new Date((lastTs - 60) * 1000);
+        console.log(`   Letztes Event: ${new Date(lastTs * 1000).toISOString()}`);
+        console.log(`   Cutoff (−60s): ${cutoff.toISOString()}\n`);
+      } else {
+        console.log("   Kein gemeinsamer Cutoff verfügbar → Vollsync.\n");
+      }
+    } else if (FORCE_REPUBLISH) {
+      console.log("⚡ FORCE_REPUBLISH=true → Filter wird übersprungen, Vollsync.\n");
+    } else if (DRY_RUN) {
+      console.log("🧪 DRY RUN → kein Cutoff-Query, Vollsync für Anzeige.\n");
+    }
+
+    // 1. WordPress-Posts holen (optional gefiltert)
+    console.log("📥 WordPress-Posts abrufen …");
+    const posts = await fetchWpPosts(cutoff);
+    console.log(`   ${posts.length} Posts gefunden\n`);
+
+    // 2. Filtern & mappen
+    const events: NostrEventTemplate[] = SYNC_MODE === "article"
+      ? posts.map(mapPostToArticleEvent)
+      : posts.map(mapPostToCalendarEvent).filter(
+          (e): e is NostrEventTemplate => e !== null,
+        );
+    const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
+    console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
+
+    if (events.length === 0) {
+      console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
+      return;
+    }
+
+    // 3. Veröffentlichen oder Dry-Run-Ausgabe
+    const perRelayStats = new Map<string, { ok: number; skipped: number; failed: number }>();
+    for (const url of NOSTR_RELAYS) {
+      perRelayStats.set(url, { ok: 0, skipped: 0, failed: 0 });
+    }
+    let eventsAcceptedSomewhere = 0;
+    let eventsRejectedEverywhere = 0;
+
     for (const evt of events) {
-      const title    = evt.tags.find((t) => t[0] === "title")?.[1]   ?? "(kein Titel)";
+      const title = evt.tags.find((t) => t[0] === "title")?.[1] ?? "(kein Titel)";
       console.log(`  📌 "${title}"`);
 
-      // Calendar: Start-Zeit anzeigen. Article: published_at.
       if (SYNC_MODE === "article") {
         const pubSec = Number(evt.tags.find((t) => t[0] === "published_at")?.[1] ?? 0);
         const pubStr = pubSec ? new Date(pubSec * 1000).toISOString().slice(0, 10) : "?";
@@ -583,24 +717,24 @@ async function main(): Promise<void> {
       }
       console.log();
     }
+
+    // Zusammenfassung
+    console.log("📊 Zusammenfassung:");
+    if (DRY_RUN) {
+      console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
+    } else {
+      console.log(`   ${eventsAcceptedSomewhere}/${events.length} Events von mindestens einem Relay akzeptiert`);
+      if (eventsRejectedEverywhere > 0) {
+        console.log(`   ⚠️  ${eventsRejectedEverywhere} Events von keinem Relay akzeptiert`);
+      }
+      console.log(`   Pro Relay:`);
+      for (const [url, s] of perRelayStats) {
+        console.log(`     ${url}: ${s.ok} ok · ${s.skipped} skipped · ${s.failed} failed`);
+      }
+    }
   } finally {
     for (const { relay } of relayPool) relay?.close();
-    if (!DRY_RUN) console.log("🔌 Relay-Verbindungen geschlossen\n");
-  }
-
-  // Zusammenfassung
-  console.log("📊 Zusammenfassung:");
-  if (DRY_RUN) {
-    console.log(`   ${events.length} Events bereit (Dry Run – nichts wurde gesendet)`);
-  } else {
-    console.log(`   ${eventsAcceptedSomewhere}/${events.length} Events von mindestens einem Relay akzeptiert`);
-    if (eventsRejectedEverywhere > 0) {
-      console.log(`   ⚠️  ${eventsRejectedEverywhere} Events von keinem Relay akzeptiert`);
-    }
-    console.log(`   Pro Relay:`);
-    for (const [url, s] of perRelayStats) {
-      console.log(`     ${url}: ${s.ok} ok · ${s.skipped} skipped · ${s.failed} failed`);
-    }
+    if (!DRY_RUN) console.log("\n🔌 Relay-Verbindungen geschlossen");
   }
 }
 
