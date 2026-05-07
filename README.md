@@ -78,6 +78,25 @@ NOSTR_PRIVATE_KEY=nsec1… deno task cleanup
 | `EXTRA_HASHTAGS`  | –             | `""` (Workflow: `relilab`)                        | Komma-separierte Hashtag-Liste, wird jedem Event als `t`-Tag angehängt, falls nicht ohnehin aus WordPress-Tags vorhanden. Case-insensitive Dedup. |
 | `COMMUNITY_NPUBS` | –             | `""` (Workflow: relilab-npub)                     | Komma-separierte Liste von Community-Pubkeys (npub1… oder Hex), die als `h`-Tag (Communikey-Spec) an jedes Event angehängt werden. |
 
+## Inkrementeller Sync
+
+Beim Start fragt das Script jedes konfigurierte Relay nach dem neuesten
+eigenen Event des relevanten Kinds (31923 für Calendar, 30023 für Article)
+und nimmt das Minimum der `created_at`-Werte als Cutoff. Die WordPress-Query
+filtert dann mit `modified_after`, sodass nur seitdem geänderte Posts
+abgerufen und veröffentlicht werden.
+
+**Wann passiert ein Vollsync?**
+- `FORCE_REPUBLISH=true` ist gesetzt
+- Mindestens ein Relay liefert kein eigenes Event (leeres Relay, neu hinzugefügt)
+- Mindestens ein Relay-REQ schlägt fehl oder läuft in den Timeout (5 s)
+
+**Was tun bei Mapping-Änderungen?**
+Wenn der Mapping-Code (Tags, Content-Format, Hashtags) geändert wird, ändert
+sich `modified_gmt` in WordPress nicht — der Filter würde alle Bestandsposts
+ignorieren. Dann einmal mit `FORCE_REPUBLISH=true` per `workflow_dispatch`
+triggern: das holt alle Posts und ersetzt die Events mit `created_at = now`.
+
 ## Tag-Anreicherung
 
 Jedes Event wird vor dem Publish um zwei optionale Tag-Gruppen ergänzt:
