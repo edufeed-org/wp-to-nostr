@@ -296,6 +296,11 @@ function queryNewestCreatedAt(
           oneose: () => finish(newest),
         },
       );
+      // Falls subscribe die Handler synchron gerufen hat (finish bereits durch),
+      // war sub zu dem Zeitpunkt noch undefined — jetzt nachträglich schließen.
+      if (done) {
+        try { sub.close(); } catch { /* ignore */ }
+      }
     } catch (err) {
       console.warn(`     ⚠️  ${url}: ${(err as Error).message}`);
       finish(null);
