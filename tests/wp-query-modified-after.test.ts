@@ -3,7 +3,7 @@ import { buildWpUrl } from "../wp-to-nostr.ts";
 
 const BASE = "https://relilab.org/wp-json/wp/v2/posts";
 
-Deno.test("buildWpUrl: calendar-Mode → setzt meta_key/meta_value-Sortierung", () => {
+Deno.test("buildWpUrl: calendar-Mode → date-Sortierung ohne meta_key (WP lehnt orderby=meta_value ab)", () => {
   const url = buildWpUrl({
     apiUrl: BASE,
     category: "176",
@@ -13,13 +13,13 @@ Deno.test("buildWpUrl: calendar-Mode → setzt meta_key/meta_value-Sortierung", 
   const u = new URL(url);
   assertEquals(u.searchParams.get("categories"), "176");
   assertEquals(u.searchParams.get("per_page"), "100");
-  assertEquals(u.searchParams.get("meta_key"), "relilab_startdate");
-  assertEquals(u.searchParams.get("orderby"), "meta_value");
+  assertEquals(u.searchParams.has("meta_key"), false);
+  assertEquals(u.searchParams.get("orderby"), "date");
   assertEquals(u.searchParams.get("order"), "desc");
   assertEquals(u.searchParams.get("page"), "1");
 });
 
-Deno.test("buildWpUrl: article-Mode → nutzt date-Sortierung mit author-embed", () => {
+Deno.test("buildWpUrl: article-Mode → date-Sortierung mit author- und featuredmedia-Embed", () => {
   const url = buildWpUrl({
     apiUrl: BASE,
     category: "6",
@@ -29,7 +29,7 @@ Deno.test("buildWpUrl: article-Mode → nutzt date-Sortierung mit author-embed",
   const u = new URL(url);
   assertEquals(u.searchParams.get("orderby"), "date");
   assertEquals(u.searchParams.get("order"), "desc");
-  assertEquals(u.searchParams.get("_embed"), "author");
+  assertEquals(u.searchParams.get("_embed"), "author,wp:featuredmedia");
   assertEquals(u.searchParams.get("page"), "2");
 });
 
