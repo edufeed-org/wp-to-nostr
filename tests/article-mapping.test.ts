@@ -17,6 +17,9 @@ function fixturePost(overrides: Record<string, unknown> = {}): any {
     taxonomy_info: { post_tag: [{ label: "OER" }, { label: "Theologie" }] },
     _embedded: {
       author: [{ name: "Corinna Ullmann", link: "https://relilab.org/author/colibri/" }],
+      "wp:featuredmedia": [{
+        caption: { rendered: "<p>Bildlizenz: Copyright Institut für katholische Theologie an der Uni Vechta</p>\n" },
+      }],
     },
     ...overrides,
   };
@@ -91,6 +94,41 @@ Deno.test("mapPostToArticleEvent: Autor ohne Link → Header ohne Markdown-Link"
   const evt = mapPostToArticleEvent(post);
   assertStringIncludes(evt.content, "> Erstellt von: Anonymer Autor");
   assert(!evt.content.includes("[Anonymer Autor]"));
+});
+
+Deno.test("mapPostToArticleEvent: Bild-Caption (Lizenz) als Blockquote im Header", () => {
+  const evt = mapPostToArticleEvent(fixturePost());
+  assertStringIncludes(
+    evt.content,
+    "> Bildlizenz: Copyright Institut für katholische Theologie an der Uni Vechta",
+  );
+  // Caption gehört in den Header-Block, also vor den eigentlichen Content
+  assert(evt.content.indexOf("Bildlizenz:") < evt.content.indexOf("Hallo Welt"));
+});
+
+Deno.test("mapPostToArticleEvent: mehrzeilige Caption → jede Zeile als Blockquote", () => {
+  const post = fixturePost({
+    _embedded: {
+      "wp:featuredmedia": [{
+        caption: { rendered: "<p>Zeile eins</p>\n<p>Zeile zwei</p>\n" },
+      }],
+    },
+  });
+  const evt = mapPostToArticleEvent(post);
+  assertStringIncludes(evt.content, "> Zeile eins");
+  assertStringIncludes(evt.content, "> Zeile zwei");
+});
+
+Deno.test("mapPostToArticleEvent: ohne featuredmedia/Caption keine Bild-Zeile", () => {
+  const noMedia = mapPostToArticleEvent(fixturePost({
+    _embedded: { author: [{ name: "X" }] },
+  }));
+  const emptyCaption = mapPostToArticleEvent(fixturePost({
+    _embedded: { "wp:featuredmedia": [{ caption: { rendered: "" } }] },
+  }));
+  assert(!noMedia.content.includes("Bildlizenz"));
+  assertStringIncludes(noMedia.content, "> Veröffentlicht auf");
+  assertStringIncludes(emptyCaption.content, "> Veröffentlicht auf");
 });
 
 Deno.test("mapPostToArticleEvent: kein start/end/start_tzid (das ist Calendar-Spezifika)", () => {

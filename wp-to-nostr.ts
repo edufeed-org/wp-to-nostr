@@ -47,6 +47,7 @@ interface WpPost {
   taxonomy_info?: { post_tag?: Array<{ label: string }> };
   _embedded?: {
     author?: Array<{ name?: string; link?: string }>;
+    "wp:featuredmedia"?: Array<{ caption?: { rendered?: string } }>;
   };
 }
 
@@ -324,15 +325,18 @@ export function buildWpUrl(opts: BuildWpUrlOpts): string {
   url.searchParams.set("per_page", "100");
 
   if (opts.syncMode === "calendar") {
-    // Termine: nach relilab_startdate sortieren (ACF-Custom-Field)
-    url.searchParams.set("meta_key", "relilab_startdate");
-    url.searchParams.set("orderby", "meta_value");
-    url.searchParams.set("order", "desc");
-  } else {
-    // Article: nach Veröffentlichungsdatum, mit Autor-Embed
+    // Termine: nach Veröffentlichungsdatum sortieren. Die frühere Sortierung
+    // nach relilab_startdate (orderby=meta_value) wird von der WP-API
+    // inzwischen mit 400 abgelehnt; funktional ist die Reihenfolge egal,
+    // weil alle Seiten geholt und alle Events einzeln publiziert werden.
     url.searchParams.set("orderby", "date");
     url.searchParams.set("order", "desc");
-    url.searchParams.set("_embed", "author");
+  } else {
+    // Article: nach Veröffentlichungsdatum, mit Autor- und Beitragsbild-Embed
+    // (Caption des Beitragsbilds enthält die Bildlizenz)
+    url.searchParams.set("orderby", "date");
+    url.searchParams.set("order", "desc");
+    url.searchParams.set("_embed", "author,wp:featuredmedia");
   }
 
   url.searchParams.set("page", String(opts.page));
@@ -518,7 +522,20 @@ export function mapPostToArticleEvent(post: WpPost): NostrEventTemplate {
       : `> Erstellt von: ${authorName}`
     : "";
   const sourceLine = `> Veröffentlicht auf [relilab.org](${wpUrl})`;
-  const headerBlock = [authorLine, sourceLine].filter(Boolean).join("\n") + "\n\n";
+
+  // Caption des Beitragsbilds (enthält bei relilab die Bildlizenz) als
+  // Blockquote-Zeile(n) in den Header — jede Zeile einzeln prefixen,
+  // damit mehrzeilige Captions im Blockquote bleiben.
+  const captionMd = htmlToMarkdown(
+    post._embedded?.["wp:featuredmedia"]?.[0]?.caption?.rendered ?? "",
+  );
+  const captionLines = captionMd
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => `> ${line}`)
+    .join("\n");
+
+  const headerBlock = [authorLine, sourceLine, captionLines].filter(Boolean).join("\n") + "\n\n";
   const fullContent = headerBlock + contentMd;
 
   const keywordTags = (post.taxonomy_info?.post_tag ?? [])
