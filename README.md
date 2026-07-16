@@ -11,6 +11,8 @@ Holt Posts aus einer WordPress REST-API, mappt sie auf das [NIP-52](https://gith
 - **HTML → Markdown** – Content und Excerpt via Turndown
 - **Addressable Events** – `d`-Tag = WordPress-Permalink, Relay ersetzt automatisch ältere Versionen
 - **Relay-Deduplizierung** – `created_at` = `modified_gmt` aus WordPress → unveränderte Posts werden vom Relay automatisch ignoriert (kein unnötiger Write)
+- **Kein Republish ohne inhaltliche Änderung** – vor dem Publish wird der Event-Payload (Tags + Content) mit der Bestandsversion auf jedem Relay verglichen; ein reiner `modified_gmt`-Bump (WP-Bulk-Edit, Plugin-Save) löst kein Republish aus
+- **Vergangene Termine werden übersprungen** – Termine, deren Start/Ende bereits vorbei ist, werden nicht (erneut) publiziert und landen damit nicht als "frisch" in Client-Timelines
 - **Single-Connection** – alle Events über eine einzige WebSocket-Verbindung (statt pro Event eine neue)
 - **Dry-Run-Modus** – Events anzeigen ohne zu posten
 - **Inspect-Tool** – einzelne Posts debuggen mit Vergleichstabelle
@@ -90,6 +92,22 @@ abgerufen und veröffentlicht werden.
 - `FORCE_REPUBLISH=true` ist gesetzt
 - Mindestens ein Relay liefert kein eigenes Event (leeres Relay, neu hinzugefügt)
 - Mindestens ein Relay-REQ schlägt fehl oder läuft in den Timeout (5 s)
+
+**Schutz vor Timeline-Spam (zwei unabhängige Guards):**
+
+1. *Vergangene Termine:* `mapPostToCalendarEvent()` überspringt Posts, deren
+   Termin (Ende, ersatzweise Start) bereits vorbei ist. WP-Edits an alten
+   Posts (z. B. Saison-Aufräumen) bumpen `modified_gmt` — ohne diesen Filter
+   würden längst gelaufene Termine mit frischem `created_at` erneut oben in
+   Client-Timelines auftauchen. Laufende Termine bleiben synchronisiert.
+2. *Unveränderter Payload:* Vor dem Publish holt das Script pro Relay die
+   Bestandsversion jedes eigenen Events (d-Tag → neueste Version) und
+   vergleicht Tags + Content (ohne `created_at`). Publiziert wird nur auf
+   Relays, denen das Event fehlt oder deren Version inhaltlich abweicht.
+   Hält ein Relay bereits eine neuere Version mit anderem Payload (z. B. aus
+   einem früheren `FORCE_REPUBLISH`), wird `created_at` darüber angehoben,
+   damit das Replace nicht mit „have newer" abgelehnt wird. Bei
+   `FORCE_REPUBLISH=true` ist der Vergleich deaktiviert.
 
 **Was tun bei Mapping-Änderungen?**
 Wenn der Mapping-Code (Tags, Content-Format, Hashtags) geändert wird, ändert
