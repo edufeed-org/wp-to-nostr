@@ -234,7 +234,7 @@ export interface RelayLike {
   subscribe(
     filters: Array<Record<string, unknown>>,
     handlers: {
-      onevent?: (event: { created_at: number }) => void;
+      onevent?: (event: { created_at: number; tags?: string[][]; content?: string }) => void;
       oneose?: () => void;
     },
   ): { close: () => void };
@@ -299,6 +299,69 @@ function queryNewestCreatedAt(
       );
       // Falls subscribe die Handler synchron gerufen hat (finish bereits durch),
       // war sub zu dem Zeitpunkt noch undefined — jetzt nachträglich schließen.
+      if (done) {
+        try { sub.close(); } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.warn(`     ⚠️  ${url}: ${(err as Error).message}`);
+      finish(null);
+    }
+  });
+}
+
+// ── Bestehende eigene Events pro Relay abrufen ───────────────────────────────
+// Liefert eine Map d-Tag → neueste Bestandsversion (created_at, tags, content)
+// für den Payload-Vergleich vor dem Publish. null = Zustand unbekannt
+// (Connect-/Query-Fehler oder Timeout) → Caller publiziert sicherheitshalber.
+
+export function fetchExistingEventsByD(
+  url: string,
+  relay: RelayLike | null,
+  pubkeyHex: string,
+  kind: number,
+): Promise<Map<string, StoredEvent> | null> {
+  return new Promise((resolve) => {
+    if (!relay) {
+      resolve(null);
+      return;
+    }
+
+    const byD = new Map<string, StoredEvent>();
+    let done = false;
+
+    const finish = (value: Map<string, StoredEvent> | null) => {
+      if (done) return;
+      done = true;
+      try { sub?.close(); } catch { /* ignore */ }
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(() => {
+      console.warn(`     ⚠️  ${url}: Timeout beim Abrufen der Bestands-Events`);
+      finish(null);
+    }, RELAY_QUERY_TIMEOUT_MS);
+
+    let sub: { close: () => void } | undefined;
+    try {
+      sub = relay.subscribe(
+        [{ authors: [pubkeyHex], kinds: [kind] }],
+        {
+          onevent: (evt) => {
+            const d = (evt.tags ?? []).find((t) => t[0] === "d")?.[1];
+            if (d === undefined) return;
+            const existing = byD.get(d);
+            if (!existing || evt.created_at > existing.created_at) {
+              byD.set(d, {
+                created_at: evt.created_at,
+                tags: evt.tags ?? [],
+                content: evt.content ?? "",
+              });
+            }
+          },
+          oneose: () => finish(byD),
+        },
+      );
       if (done) {
         try { sub.close(); } catch { /* ignore */ }
       }
@@ -439,12 +502,21 @@ function decodeHtmlEntities(s: string): string {
 
 // ── WordPress-Post → Nostr-Event mappen ──────────────────────────────────────
 
-function mapPostToCalendarEvent(post: WpPost): NostrEventTemplate | null {
+export function mapPostToCalendarEvent(
+  post: WpPost,
+  nowSec: number = Math.floor(Date.now() / 1000),
+): NostrEventTemplate | null {
   const startTs = wpDateToUnix(post.acf?.relilab_startdate);
   const endTs   = wpDateToUnix(post.acf?.relilab_enddate);
 
   // Posts ohne Startdatum überspringen (kein gültiges Kalender-Event)
   if (!startTs) return null;
+
+  // Bereits vergangene Termine überspringen: WP-Edits an alten Posts (z. B.
+  // Saison-Aufräumen) bumpen modified_gmt und würden den Termin sonst mit
+  // frischem created_at erneut in die Timeline spülen. Laufende Termine
+  // (Ende in der Zukunft) bleiben synchronisiert.
+  if (Math.max(startTs, endTs) < nowSec) return null;
 
   // d-Tag + r-Tag: originale WordPress-Permalink-URL
   const wpUrl = post.link ?? post.guid?.rendered ?? String(post.id);
@@ -563,6 +635,52 @@ export function mapPostToArticleEvent(post: WpPost): NostrEventTemplate {
   };
 }
 
+// ── Unveränderte Events erkennen ─────────────────────────────────────────────
+// Ein reiner modified_gmt-Bump in WordPress (Bulk-Edit, Plugin-Save) darf kein
+// Republish auslösen. Deshalb wird vor dem Publish die inhaltliche Identität
+// (tags + content, ohne created_at) gegen die Bestandsversion auf jedem Relay
+// verglichen — analog zum Content-Addressing in edufeed-data.
+
+export interface StoredEvent {
+  created_at: number;
+  tags: string[][];
+  content: string;
+}
+
+export function eventPayloadEquals(
+  a: { tags: string[][]; content: string },
+  b: { tags: string[][]; content: string },
+): boolean {
+  // Tag-Reihenfolge trägt keine Semantik und ist nicht stabil (WP liefert
+  // Schlagwörter in wechselnder Reihenfolge) → sortiert vergleichen.
+  const tagKey = (tags: string[][]) =>
+    JSON.stringify(tags.map((t) => JSON.stringify(t)).sort());
+  return a.content === b.content && tagKey(a.tags) === tagKey(b.tags);
+}
+
+// Entscheidet pro Relay, ob publiziert wird:
+//   existing = StoredEvent → nur bei abweichendem Payload
+//   existing = null        → Event fehlt auf dem Relay → publizieren (Backfill)
+//   existing = undefined   → Zustand unbekannt (Query-Fehler) → publizieren
+// Hält ein Ziel-Relay bereits eine neuere Version mit anderem Payload (z. B.
+// aus einem früheren FORCE_REPUBLISH), wird created_at darüber angehoben,
+// sonst würde das adressierbare Event dort mit „have newer" abgelehnt.
+export function planPublish(
+  evt: NostrEventTemplate,
+  existingByRelay: Array<{ url: string; existing: StoredEvent | null | undefined }>,
+): { relayUrls: string[]; createdAt: number } {
+  const relayUrls: string[] = [];
+  let createdAt = evt.created_at;
+  for (const { url, existing } of existingByRelay) {
+    if (existing && eventPayloadEquals(evt, existing)) continue;
+    relayUrls.push(url);
+    if (existing && existing.created_at >= createdAt) {
+      createdAt = existing.created_at + 1;
+    }
+  }
+  return { relayUrls, createdAt };
+}
+
 // ── Auf Nostr veröffentlichen ─────────────────────────────────────────────────
 
 interface PublishResult {
@@ -664,19 +782,43 @@ async function main(): Promise<void> {
       console.log("🧪 DRY RUN → kein Cutoff-Query, Vollsync für Anzeige.\n");
     }
 
+    // Bestands-Events pro Relay abrufen (d-Tag → neueste Version) für den
+    // Payload-Vergleich vor dem Publish. Bei FORCE_REPUBLISH bewusst leer,
+    // damit alles publiziert wird.
+    const existingMaps = new Map<string, Map<string, StoredEvent> | null>();
+    if (!DRY_RUN && !FORCE_REPUBLISH && pubkeyHex) {
+      console.log("🔎 Bestands-Events von Relays abrufen …");
+      const maps = await Promise.all(
+        relayPool.map(({ url, relay }) =>
+          fetchExistingEventsByD(url, relay, pubkeyHex!, kindForSyncMode(SYNC_MODE))
+        ),
+      );
+      relayPool.forEach(({ url }, i) => {
+        existingMaps.set(url, maps[i]);
+        console.log(`   ${url}: ${maps[i] === null ? "unbekannt (Fehler/Timeout)" : `${maps[i]!.size} Events`}`);
+      });
+      console.log();
+    }
+
     // 1. WordPress-Posts holen (optional gefiltert)
     console.log("📥 WordPress-Posts abrufen …");
     const posts = await fetchWpPosts(cutoff);
     console.log(`   ${posts.length} Posts gefunden\n`);
 
     // 2. Filtern & mappen
+    // Explizite Lambda: map(fn) würde den Array-Index als nowSec durchreichen.
     const events: NostrEventTemplate[] = SYNC_MODE === "article"
       ? posts.map(mapPostToArticleEvent)
-      : posts.map(mapPostToCalendarEvent).filter(
+      : posts.map((p) => mapPostToCalendarEvent(p)).filter(
           (e): e is NostrEventTemplate => e !== null,
         );
     const itemLabel = SYNC_MODE === "article" ? "Artikel" : "Termine";
-    console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren\n`);
+    const droppedCount = posts.length - events.length;
+    console.log(`📅 ${events.length} ${itemLabel} zum Synchronisieren` + (
+      SYNC_MODE === "calendar" && droppedCount > 0
+        ? ` (${droppedCount} übersprungen: vergangen oder ohne Startdatum)\n`
+        : "\n"
+    ));
 
     if (events.length === 0) {
       console.log("✅ Nichts zu veröffentlichen – alles aktuell.");
@@ -709,8 +851,36 @@ async function main(): Promise<void> {
         console.log("     [DRY RUN] Tags:", JSON.stringify(evt.tags));
         console.log(`     [DRY RUN] Content (${evt.content.length} Zeichen): ${evt.content.slice(0, 120)}…`);
       } else {
-        const results = await publishEvent(evt, privkey!, relayPool);
-        let acceptedCount = 0;
+        // Nur auf Relays publizieren, deren Bestandsversion fehlt oder
+        // inhaltlich abweicht — ein reiner modified_gmt-Bump wird übersprungen.
+        const dTag = evt.tags.find((t) => t[0] === "d")?.[1] ?? "";
+        const existingByRelay = relayPool.map(({ url }) => {
+          const m = existingMaps.get(url);
+          return { url, existing: m ? (m.get(dTag) ?? null) : undefined };
+        });
+        const plan = planPublish(evt, existingByRelay);
+        const unchangedCount = relayPool.length - plan.relayUrls.length;
+        for (const { url } of relayPool) {
+          if (!plan.relayUrls.includes(url)) perRelayStats.get(url)!.skipped++;
+        }
+
+        if (plan.relayUrls.length === 0) {
+          console.log("     ⏭️  unverändert – auf allen Relays aktuell");
+          eventsAcceptedSomewhere++;
+          console.log();
+          continue;
+        }
+        if (unchangedCount > 0) {
+          console.log(`     ⏭️  ${unchangedCount} Relay(s) unverändert übersprungen`);
+        }
+
+        const targets = relayPool.filter(({ url }) => plan.relayUrls.includes(url));
+        const results = await publishEvent(
+          { ...evt, created_at: plan.createdAt },
+          privkey!,
+          targets,
+        );
+        let acceptedCount = unchangedCount;
         for (const r of results) {
           const stat = perRelayStats.get(r.url)!;
           if (r.ok && r.skipped) {
